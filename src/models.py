@@ -4,7 +4,7 @@ from modules import NimbusLinear
 
 
 class Perceptron2(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self, in_features, out_features, hidden_size1=32, hidden_size2=32):
         super(Perceptron2, self).__init__()
         self.bn0 = nn.BatchNorm1d(in_features)
         self.linear1 = NimbusLinear(in_features, out_features)
