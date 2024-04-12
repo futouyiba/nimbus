@@ -29,7 +29,7 @@ def DM_next_layer(model: NimbusModel):
     for i in range(len(nimbusLayers)):
         layer = nimbusLayers[i]
 
-        if nimbusLayers[i].state == NIMBUS_STATE_MATMUL:
+        if nimbusLayers[i].state == NIMBUS_STATE_MATMUL_WITH_GRAD:
             if not nextLayerProcessed:
                 nimbusLayers[i].state = NIMBUS_STATE_MADDNESS_BACKPROP
             

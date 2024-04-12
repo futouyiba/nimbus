@@ -16,13 +16,21 @@ RUNS_PATH_ROOT = os.path.join(SAVES_PATH_ROOT, "runs")
 
 #region Consts:NimbusLayer
 # used for Halut layer state flags
-# 1. normal linear state, which uses normal mat mul and add operations
-# 2. MADDNESS back-prop state, which uses matrices for tree-like operations, and can back-prop
-# 3. MADDNESS only state, which uses direct tree-like operations, and cannot back-prop
-NIMBUS_STATE_MATMUL = 1
-NIMBUS_STATE_MADDNESS_BACKPROP = 2
-NIMBUS_STATE_MADDNESS_ONLY = 3
-NIMBUS_STATE_MATMUL_WITH_GRAD = 4
+# 下面这些状态常量相当于枚举，用于标识Nimbus层的状态，以便在训练过程中进行不同的操作。
+# 根据训练阶段和激活次序，Nimbus层会在不同的状态下进行不同的操作。Nimbus层不仅管理自己的操作，还会根据情况跳过一些层比如BN、ReLU等。
+
+# 这个状态下，使用普通的矩阵乘法，慢但稳妥、精确、可反向传播。初始化模型时，所有层都是这个状态。
+# 这个状态会用来进行正常的训练，并得到一个基准模型。另外，存input也用这个状态进行。
+NIMBUS_STATE_MATMUL_WITH_GRAD = 1
+# 这个状态下，使用普通矩阵乘法，但不接受梯度更新。逐层DM化时，所有层都会先转到这个状态。
+# 它可以提供DM训练层的反向传播阶梯，但不会更新参数。随后，第一层会转到DM backprop状态，接受梯度更新。
+NIMBUS_STATE_MATMUL_NO_GRAD = 2
+# DM的意思是differentiable MADDNESS。这个状态下，使用selection matrix、treeDesMatrix、thresholds等参数进行可微的MADDNESS操作,并接受梯度更新。
+# 可微的过程使用了STE（Straight-Through Estimator）技术。主要更新两个参数：lut和thresholds。
+# 
+NIMBUS_STATE_DM_BACKPROP = 3
+NIMBUS_STATE_MADDNESS_ONLY = 4
+NIMBUS_STATE_DM_NO_GRAD = 5
 #endregion
 
 #region Consts:Usage

@@ -116,7 +116,7 @@ class NimbusLayer(nn.Module):
 
     def __init__(self):
         super(NimbusLayer, self).__init__()
-        self.state = Parameter(torch.tensor(defines.NIMBUS_STATE_MATMUL, dtype=torch.int32), requires_grad=False)
+        self.state = Parameter(torch.tensor(defines.NIMBUS_STATE_MATMUL_WITH_GRAD, dtype=torch.int32), requires_grad=False)
         self.name = Parameter(torch.tensor(f'nimbus_layer_{NimbusLayer.count}', dtype=torch.string), requires_grad=False)
         self.register_load_state_dict_post_hook(self.state_dict_hook)
         NimbusLayer.count += 1
@@ -140,7 +140,7 @@ class NimbusLayer(nn.Module):
 # 2. MADDNESS反向传播状态，使用树状操作的矩阵，可以反向传播
 # 3. MADDNESS only状态，使用直接的树状操作，不能反向传播
 class NimbusLinear(NimbusLayer, nn.Linear):
-    def __init__(self, in_features, out_features, bias=True, state=defines.NIMBUS_STATE_MATMUL
+    def __init__(self, in_features, out_features, bias=True, state=defines.NIMBUS_STATE_MATMUL_WITH_GRAD
                  , codeblockCount=-1, treeDepth=4):
         super(NimbusLinear, self).__init__()
         nn.Linear.__init__(self, in_features, out_features, bias)
@@ -167,7 +167,7 @@ class NimbusLinear(NimbusLayer, nn.Linear):
 
     def forward(self, inputMatrix):
         # do a state switch
-        if self.state == defines.NIMBUS_STATE_MATMUL:
+        if self.state == defines.NIMBUS_STATE_MATMUL_WITH_GRAD:
             if self.want_to_record_once:
                 # save the input for MADDNESS to a numpy file
                 np.save(f'input_{self.name}.npy', inputMatrix.cpu().numpy())
