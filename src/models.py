@@ -2,8 +2,15 @@ from torch import nn
 from torch.nn import init
 from modules import NimbusLinear
 
+class NimbusModel(nn.Module):
+    def __init__() -> None:
+        super().__init__())
 
-class Perceptron2(nn.Module):
+    def get_nimbus_layers(self)->list[NimbusLinear]:
+        pass
+
+
+class Perceptron2(NimbusModel):
     def __init__(self, in_features, out_features, hidden_size1=32, hidden_size2=32):
         super(Perceptron2, self).__init__()
         self.bn0 = nn.BatchNorm1d(in_features)
@@ -25,3 +32,6 @@ class Perceptron2(nn.Module):
         x = self.activation2(x)
         x = self.linear3(x)
         return x
+    
+    def get_nimbus_layers(self):
+        return [self.linear1, self.linear2, self.linear3]

@@ -111,19 +111,41 @@ def create_4layer_tree_des_matrix(C: int = 1, dtype=torch.float16) -> torch.Tens
         ] = bit_matrix_base
     return bit_matrix
 
+class NimbusLayer(nn.Module):
+    count = 0
+
+    def __init__(self):
+        super(NimbusLayer, self).__init__()
+        self.state = Parameter(torch.tensor(defines.NIMBUS_STATE_MATMUL, dtype=torch.int32), requires_grad=False)
+        self.name = Parameter(torch.tensor(f'nimbus_layer_{NimbusLayer.count}', dtype=torch.string), requires_grad=False)
+        self.register_load_state_dict_post_hook(self.state_dict_hook)
+        NimbusLayer.count += 1
+
+    def prepare_record_once(self) -> None:
+        pass
+
+    def state_dict_hook(self) -> None:
+        pass
+
+    def set_state(self, state: int) -> None:
+        self.state = state
+
 
 # an enhanced version of nn.Linear, which can handle MADDNESS features, and can switch between several states:
 # 1. normal linear state, which uses normal mat mul and add operations
 # 2. MADDNESS back-prop state, which uses matrices for tree-like operations, and can back-prop
 # 3. MADDNESS only state, which uses direct tree-like operations, and cannot back-prop
-class NimbusLinear(nn.Linear):
-    count = 0
-
-    def __init__(self, in_features, out_features, bias=True, state=defines.NIMBUS_STATE_NORMAL
+# nn.Linear的增强版本，可以处理MADDNESS特性，并且可以在几种状态之间切换：
+# 1. 正常线性状态，使用正常的矩阵乘法和加法操作
+# 2. MADDNESS反向传播状态，使用树状操作的矩阵，可以反向传播
+# 3. MADDNESS only状态，使用直接的树状操作，不能反向传播
+class NimbusLinear(NimbusLayer, nn.Linear):
+    def __init__(self, in_features, out_features, bias=True, state=defines.NIMBUS_STATE_MATMUL
                  , codeblockCount=-1, treeDepth=4):
-        super(NimbusLinear, self).__init__(in_features, out_features, bias)
+        super(NimbusLinear, self).__init__()
+        nn.Linear.__init__(self, in_features, out_features, bias)
         self.state = Parameter(torch.tensor(state, dtype=torch.int32), requires_grad=False)
-        self.name = Parameter(torch.tensor(f'nimbus_linear_{NimbusLinear.count}', dtype=torch.string), requires_grad=False)
+        self.name = Parameter(torch.tensor(f'nimbus_linear_{NimbusLayer.count-1}', dtype=torch.string), requires_grad=False)
         self.treeDepth = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
         self.bucketsPerBlock = 2 ** treeDepth
         # the LUT for MADDNESS
@@ -136,21 +158,21 @@ class NimbusLinear(nn.Linear):
         # it's a 2D matrix, a diagonalized sparse matrix
         self.treeDesMat = Parameter(create_4layer_tree_des_matrix(), requires_grad=False)
         self.dims = Parameter(torch.zeros(1, dtype=torch.int32), requires_grad=False)
-        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=False)
+        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=True)
         # a one time flag to record the input, used for saving the input for MADDNESS
         # the reason MADDNESS needs it is that buckets should be calculated based on the input, and LUT should be calculated based on the input
-        self.want_to_save_input = False
+        self.want_to_record_once = False
         # self.split_factor = 1
         self.register_load_state_dict_post_hook(self.state_dict_hook)
 
     def forward(self, inputMatrix):
         # do a state switch
-        if self.state == defines.NIMBUS_STATE_NORMAL:
-            if self.want_to_save_input:
+        if self.state == defines.NIMBUS_STATE_MATMUL:
+            if self.want_to_record_once:
                 # save the input for MADDNESS to a numpy file
                 np.save(f'input_{self.name}.npy', inputMatrix.cpu().numpy())
                 # one time only
-                self.want_to_save_input = False
+                self.want_to_record_once = False
             return nn.functional.linear(inputMatrix, self.weight, self.bias).to(inputMatrix.device)
         elif self.state == defines.NIMBUS_STATE_MADDNESS_BACKPROP:
             # bunch of math ops here, Straight-Through Estimator (STE) is used to approximate the gradient
@@ -193,6 +215,16 @@ class NimbusLinear(nn.Linear):
             state_dict['thresholds'] = state_dict['thresholds'].cpu().numpy().tolist()
         return state_dict
     
-    def register_record_once(self):
-        self.want_to_save_input = True
+    def prepare_record_once(self):
+        self.want_to_record_once = True
 
+    # 这里类似一个状态机，根据状态的不同，进行不同的操作
+    # 基本来说有4种状态
+    def set_state(self, state: int) -> None:
+        self.state = state
+        if state == defines.NIMBUS_STATE_MADDNESS_BACKPROP:
+            self.want_to_record_once = True
+
+
+class NimbusConv1d(NimbusLayer, nn.Conv1d):
+    pass
