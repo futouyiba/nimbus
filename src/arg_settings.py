@@ -47,7 +47,7 @@ else:
 
 Criterion = torch.nn.CrossEntropyLoss()
 
-DataPath = os.path.join(defines.DATA_PATH_ROOT, args.dataset)
+DataPath = path.join(defines.DATA_PATH_ROOT, args.dataset)
 TestData = torch.load(path.join(DataPath, 'test_data.pt'))
 TestLabels = torch.load(path.join(DataPath, 'test_labels.pt'))
 TestDataset = torch.utils.data.TensorDataset(TestData, TestLabels)

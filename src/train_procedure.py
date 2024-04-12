@@ -1,11 +1,3 @@
-import torch
-from defines import *
-import arg_settings
-import torch.nn as nn
-
-from models import NimbusModel
-from modules import NimbusLayer, NimbusLinear
-
 # 训练过程分为几个阶段：
 # - 初训。首先使用普通的矩阵乘法、神经网络、反向传播，来获得一个训练基准。这个阶段主要达成几个目的：
 # -- 给DM的LUT优化提供input
@@ -20,18 +12,90 @@ from modules import NimbusLayer, NimbusLinear
 # - 微调。这个阶段里，每个Nimbus Layer都植入DM状态，进行较为缓慢的DM梯度降落。这一步的成本由于前几步而降低，尤其是在当前主流的深度学习现状下，典型的层数>8，<100(TODO)，这时受益显著。
 # - 终优化。使用变换后的LUT取代BN层、激活层等，达到进一步的速度提升。
 
+from os import path
+import time
+import torch
+from defines import *
+import arg_settings
+import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
+from models import NimbusModel
+from modules import NimbusLayer, NimbusLinear
+# import webbrowser
+import subprocess
+
 # TODO put these into function body instead of global variables
 LastDMizedLayer:NimbusLayer = None
 CurDMizedLayer:NimbusLayer = None
+GlobalBestAccuracy = 0.0
+StepBestAccuracy = 0.0
+# 当前进行到的步骤。1为普通训练，2为DM化，3为微调，4为评估MADDNESS only。其中特殊的是DM化，它是一个逐层的过程，每一层都会进行一次DM化。这时会加上0.01
+# 举例：2.01为第一层DM化，2.02为第二层DM化，以此类推。
+curStep = 0.0
+
+
+modelDataCombined = f"{arg_settings.TrainModel._get_name}-{arg_settings.DataPath}"
+procedure_start_time = time.time()
+procedure_name = modelDataCombined + f'-{procedure_start_time}'
+runPath = f'{RUNS_PATH_ROOT}/{procedure_name}'
+writer = SummaryWriter(runPath)
+checkpointPath = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, modelDataCombined)
+
+# 启动TensorBoard
+tensorboard_process = subprocess.Popen(['tensorboard', '--logdir', RUNS_PATH_ROOT])
+
 
 def SaveInputCache(model: nn.Module):
     pass
 
-def train_epochs_from_setting(model: nn.Module):
-    pass
+def train_epochs(model: nn.Module, epochs:int, start_epoch:int=0):
+    print(f"Training model {model} for {epochs} epochs, starting from epoch {start_epoch}.")
+    StepBestAccuracy = 0.0
+    trainStepStartTime = time.time()
+    for epoch in range(start_epoch, start_epoch+epochs):
+        print(f"Epoch {epoch} started.")
+        model.train()
+        arg_settings.Optimizer.zero_grad()
+        # batch training
+        for i, (data, target) in enumerate(arg_settings.TrainDataLoader):
+            data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
+            output = model(data)
+            loss = arg_settings.Criterion(output, target)
+            writer.add_scalar('training loss', loss, epoch)
+            loss.backward()
+            arg_settings.Optimizer.step()
+            arg_settings.Optimizer.zero_grad()
+            acc = (output.argmax(dim=1) == target).float().mean()
+            writer.add_scalar('training accuracy', acc, epoch)
+        # evaluate on test set
+        test_acc = evaluate_model(model, epoch=epoch)
+        print(f"Epoch {epoch} finished. Test accuracy: {test_acc}")
+    print(f"Training {curStep} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
+    # TODO 把这些路径整理一下。现在先专注于功能，后续再整理路径。
+    torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step_model_epoch{epoch}.pth")
 
-def evaluate_model(model: nn.Module):
-    pass
+def evaluate_model(model: nn.Module, epoch:int,)->float:
+    model.eval()
+    with torch.inference_mode():
+        correct = 0
+        total = 0
+        for data, target in arg_settings.TestDataLoader:
+            data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
+            output = model(data)
+            _, predicted = torch.max(output.data, 1)
+            total += target.size(0)
+            correct += (predicted == target).sum().item()
+        acc = 100 * correct / total
+        writer.add_scalar('test accuracy', acc, epoch)
+
+
+        if(acc>StepBestAccuracy):
+            StepBestAccuracy = acc
+            torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step{curStep}_best_model_epoch{epoch}_{acc}.pth")
+        if(acc>GlobalBestAccuracy):
+            GlobalBestAccuracy = acc
+            torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/global_best_model_epoch{epoch}_{acc}.pth")
+        return acc
 
 # 把模型中某一层替换为可微的MADDNESS层，锁定其他层不进行更新。这个过程supposedly被逐个使用，比如一个3层网络，在第一层DM化（differentiable MADDNESS化）之后，
 # 第一层以MADDNESS only的方式进行推导，且不接受梯度更新，第二层以DM的方式进行推导，且接受梯度更新，第三层以普通mm的方式进行推导，不接受梯度更新。
@@ -82,22 +146,35 @@ def train_procedure():
     #region training
     if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
         # train the model
-        train_epochs_from_setting(model)
+        train_epochs(model)
         SaveInputCache(model)
         pass
     if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
         # replace each layer with differentiable MADDNESS layer, and retrain model iteratively
         for l in nimbusLayers:
             DM_next_layer(model)
-            train_epochs_from_setting(model)
+            train_epochs(model)
         pass
     if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
         # fine tune the model
         for l in nimbusLayers:
             l.set_state(NIMBUS_STATE_DM_BACKPROP)
-        train_epochs_from_setting(model)
+        train_epochs(model)
         pass
     if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
         # evaluate maddness-only model
+        for l in nimbusLayers:
+            l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
+        evaluate_model(model)
         pass
     #endregion
+
+    writer.close()
+    tensorboard_process.terminate()
+
+
+if __name__ == "main":
+    train_procedure()
+    print("=====================================================================================")
+    print("Training finished.")
+    print("=====================================================================================")

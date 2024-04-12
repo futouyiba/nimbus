@@ -130,6 +130,10 @@ class NimbusLayer(nn.Module):
     def set_state(self, state: int) -> None:
         self.state = state
 
+    def learn_maddness_params(self) -> None:
+        # TODO put logic here instead of in nimbus layer
+        pass
+
 
 # an enhanced version of nn.Linear, which can handle MADDNESS features, and can switch between several states:
 # 1. normal linear state, which uses normal mat mul and add operations
@@ -246,6 +250,33 @@ class NimbusLinear(NimbusLayer, nn.Linear):
             self.weight.requires_grad = False
             self.bias.requires_grad = False
 
+
+    def learn_maddness_params(self, X):
+        """
+        Learn the madness parameters.
+
+        Parameters:
+        - X: The input data matrix of shape (N, D), where N is the number of samples and D is the number of features.
+
+        Returns:
+        - None
+
+        This method calculates the madness parameters based on the input data matrix X.
+
+        学习MADDNESS参数。
+
+        参数：
+        - X：形状为（N，D）的输入数据矩阵，其中N是样本数，D是特征数。
+
+        返回：
+        - 无
+
+        此方法根据输入数据矩阵X以及self的成员变量计算MADDNESS参数。
+        """
+        _, D = X.shape
+
+        pass
+        
 
 class NimbusConv1d(NimbusLayer, nn.Conv1d):
     pass
