@@ -31,7 +31,7 @@ if args.model == 'perceptron2':
     TrainModel = models.Perceptron2(14, 3, hidden_size1=args.hidden_size1, hidden_size2=args.hidden_size2)
 else:
     TrainModel = None
-TrainProcessesInChain = STEP_LINEAR_ONLY | STEP_DIFFERENTIABLE_MADDNESS_LAYERS | STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS | STEP_EVALUATE_MADDNESS_ONLY  # 1111
+TrainProcessesInChain = STEP_LINEAR_ONLY | STEP_DIFFERENTIABLE_MADDNESS_LAYERS | STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS   # 0111
 InitialLearningRate = args.learning_rate
 BatchSize = args.batch_size
 EpochsEach = args.epochs

@@ -144,6 +144,7 @@ class NimbusLinear(NimbusLayer, nn.Linear):
                  , codeblockCount=-1, treeDepth=4):
         super(NimbusLinear, self).__init__()
         nn.Linear.__init__(self, in_features, out_features, bias)
+        # 下面的参数名应该可以解释他们自己是什么
         self.state = Parameter(torch.tensor(state, dtype=torch.int32), requires_grad=False)
         self.name = Parameter(torch.tensor(f'nimbus_linear_{NimbusLayer.count-1}', dtype=torch.string), requires_grad=False)
         self.treeDepth = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
@@ -164,6 +165,8 @@ class NimbusLinear(NimbusLayer, nn.Linear):
         self.want_to_record_once = False
         # self.split_factor = 1
         self.register_load_state_dict_post_hook(self.state_dict_hook)
+        # TODO 这一层管理的其他层，例如BN层、激活层等，在做高度优化的时候，会被替换为LUT
+        self.managed_layers = []
 
     def forward(self, inputMatrix):
         # do a state switch
@@ -223,7 +226,25 @@ class NimbusLinear(NimbusLayer, nn.Linear):
     def set_state(self, state: int) -> None:
         self.state = state
         if state == defines.NIMBUS_STATE_MADDNESS_BACKPROP:
-            self.want_to_record_once = True
+            self.lut.requires_grad = True
+            self.thresholds.requires_grad = True
+            self.weight.requires_grad = False
+            self.bias.requires_grad = False
+        elif state == defines.NIMBUS_STATE_MADDNESS_ONLY:
+            self.lut.requires_grad = False
+            self.thresholds.requires_grad = False
+            self.weight.requires_grad = False
+            self.bias.requires_grad = False
+        elif state == defines.NIMBUS_STATE_MATMUL_WITH_GRAD:
+            self.lut.requires_grad = False
+            self.thresholds.requires_grad = False
+            self.weight.requires_grad = True
+            self.bias.requires_grad = True
+        elif state == defines.NIMBUS_STATE_MATMUL_NO_GRAD:
+            self.lut.requires_grad = False
+            self.thresholds.requires_grad = False
+            self.weight.requires_grad = False
+            self.bias.requires_grad = False
 
 
 class NimbusConv1d(NimbusLayer, nn.Conv1d):
