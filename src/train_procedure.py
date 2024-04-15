@@ -21,10 +21,11 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from models import NimbusModel
 from modules import NimbusLayer, NimbusLinear
-# import webbrowser
 import subprocess
 import atexit
 import subprocess
+from os import path
+import os
 
 
 class TrainProcedure:
@@ -50,74 +51,118 @@ class TrainProcedure:
         # TODO put these into function body instead of global variables
         self.LastDMizedLayer: NimbusLayer = None
         self.CurDMizedLayer: NimbusLayer = None
+
         self.GlobalBestAccuracy = 0.0
         self.StepBestAccuracy = 0.0
+        self.GlobalBestCheckpointPath = None
+        self.StepBestCheckpointPath = None
         # 当前进行到的步骤。1为普通训练，2为DM化，3为微调，4为评估MADDNESS only。其中特殊的是DM化，它是一个逐层的过程，每一层都会进行一次DM化。这时会加上0.01
         # 举例：2.01为第一层DM化，2.02为第二层DM化，以此类推。
         self.curStep = 0.0
+        self.curEpoch = 0
 
-        self.modelDataCombined = f"{arg_settings.TrainModel._get_name}-{arg_settings.DataPath}"
+        self.modelDataCombined = f"{arg_settings.TrainModel.__class__.__name__}-{arg_settings.DataPath}"
         self.procedure_start_time = time.time()
         self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
         self.writer = SummaryWriter(self.runPath)
-        self.checkpointFolder = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
+        self.checkpointFolder = path.join(MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
         self.checkpointLatestPath = path.join(self.checkpointFolder, f'{self.procedure_name}.pth')
 
         # 启动TensorBoard
-        self.tensorboard_process = subprocess.Popen(['tensorboard', '--logdir', RUNS_PATH_ROOT])
+        self.tensorboard_process = subprocess.Popen(['python', '-m', 'tensorboard.main', '--logdir', self.runPath])
+        self.nimbus_layers = arg_settings.TrainModel.get_nimbus_layers()
 
 
     def SaveInputCache(self, model: nn.Module):
-        pass
+        """
+        Saves the input cache for the given model.
 
-    def train_epochs(self, model: nn.Module, epochs:int, start_epoch:int=0):
-        print(f"Training model {model} for {epochs} epochs, starting from epoch {start_epoch}.")
-        StepBestAccuracy = 0.0
+        Args:
+            model (nn.Module): The model to save the input cache for.
+
+        Returns:
+            None
+        """
+        model.eval()
+        for l in self.nimbus_layers:
+            l.prepare_record_once()
+        with torch.inference_mode():
+            model(arg_settings.TrainData.to(arg_settings.Device))
+
+
+    def train_epochs(self, model: nn.Module, epochs:int):
+        start_epoch = self.curEpoch + 1
+        print(f"Training model {model.__class__.__name__} for {epochs} epochs, starting from epoch {start_epoch}.")
+        self.StepBestAccuracy = 0.0
+        self.StepBestCheckpointPath = None
+        self.GlobalBestCheckpointPath = None
         trainStepStartTime = time.time()
         for epoch in range(start_epoch, start_epoch+epochs):
+            self.curEpoch = epoch
             print(f"Epoch {epoch} started.")
+            epoch_training_loss = 0.0
+            correct = 0
+            total = 0
             model.train()
             arg_settings.Optimizer.zero_grad()
+            # summary writer写入这个epoch当前的（经过lr decay的）learning rate
+            self.writer.add_scalar('crucial/learning_rate', arg_settings.Optimizer.param_groups[0]['lr'], epoch)
             # batch training
             for i, (data, target) in enumerate(arg_settings.TrainDataLoader):
                 data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
                 output = model(data)
                 loss = arg_settings.Criterion(output, target)
-                self.writer.add_scalar('training loss', loss, epoch)
+                epoch_training_loss += loss.item()
                 loss.backward()
+                _, predicted = torch.max(output.data, 1)
+                total += target.size(0)
+                correct += (predicted == target).sum().item()
                 arg_settings.Optimizer.step()
                 arg_settings.Optimizer.zero_grad()
                 acc = (output.argmax(dim=1) == target).float().mean()
-                self.writer.add_scalar('training accuracy', acc, epoch)
+                # 记录每个batch的loss
+                self.writer.add_scalar('batches/train_acc', acc, epoch * len(arg_settings.TrainDataLoader) + i)
+            acc = 100 * correct / total
+            self.writer.add_scalar('epoch/training_loss', epoch_training_loss, epoch)
+            self.writer.add_scalar('crucial/training_acc', acc, epoch)
             # evaluate on test set
             test_acc = self.evaluate_model(model, epoch=epoch)
+            arg_settings.LRScheduler.step()
             print(f"Epoch {epoch} finished. Test accuracy: {test_acc}")
-        print(f"Training {self.curStep} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
+        print(f"Training {self.curStep:.2f} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
         # TODO 把这些路径整理一下。现在先专注于功能，后续再整理路径。
-        torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step_model_epoch{epoch}.pth")
 
     def evaluate_model(self, model: nn.Module, epoch:int,)->float:
         model.eval()
         with torch.inference_mode():
             correct = 0
             total = 0
+            epoch_test_loss = 0.0
             for data, target in arg_settings.TestDataLoader:
                 data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
                 output = model(data)
+                loss = arg_settings.Criterion(output, target)
+                epoch_test_loss += loss.item()
                 _, predicted = torch.max(output.data, 1)
                 total += target.size(0)
                 correct += (predicted == target).sum().item()
             acc = 100 * correct / total
-            self.writer.add_scalar('test accuracy', acc, epoch)
-
+            self.writer.add_scalar('crucial/test_acc', acc, epoch)
+            self.writer.add_scalar('epoch/test_loss', epoch_test_loss, epoch)
 
             if(acc>self.StepBestAccuracy):
                 self.StepBestAccuracy = acc
-                torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step{self.curStep}_best_model_epoch{epoch}_{acc}.pth")
+                if self.StepBestCheckpointPath is not None:
+                    os.remove(self.StepBestCheckpointPath)
+                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel.__class__.__name__}/step{self.curStep:.2f}_best_model_epoch{epoch}_{acc:.4f}.pth"
+                torch.save(model.state_dict(), self.StepBestCheckpointPath)
             if(acc>self.GlobalBestAccuracy):
                 self.GlobalBestAccuracy = acc
-                torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/global_best_model_epoch{epoch}_{acc}.pth")
+                if self.GlobalBestCheckpointPath is not None:
+                    os.remove(self.GlobalBestCheckpointPath)
+                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel.__class__.__name__}/global_best_model_epoch{epoch}_{acc:.4f}.pth"
+                torch.save(model.state_dict(), self.GlobalBestCheckpointPath)
             return acc
 
     # 把模型中某一层替换为可微的MADDNESS层，锁定其他层不进行更新。这个过程supposedly被逐个使用，比如一个3层网络，在第一层DM化（differentiable MADDNESS化）之后，
@@ -164,12 +209,10 @@ class TrainProcedure:
 
         nimbusLayers = model.get_nimbus_layers()
 
-        #region data
-
         #region training
         if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
             # train the model
-            self.train_epochs(model)
+            self.train_epochs(model, arg_settings.EpochsEach)
             self.SaveInputCache(model)
             pass
         if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
@@ -197,10 +240,10 @@ class TrainProcedure:
         self.tensorboard_process.terminate()
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     trainInst = TrainProcedure()
-    trainInst.start()
     atexit.register(trainInst.cleanup)
+    trainInst.start()
 
     print("=====================================================================================")
     print("Training finished.")

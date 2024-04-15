@@ -1,8 +1,10 @@
+import math
 import os
 import time
+from typing import Literal
 import torch
 import torch.nn as nn
-from torch.nn import Parameter
+from torch.nn import Parameter,Linear
 import defines
 import numpy as np
 import maddness
@@ -115,13 +117,14 @@ def create_4layer_tree_des_matrix(C: int = 1, dtype=torch.float16) -> torch.Tens
         ] = bit_matrix_base
     return bit_matrix
 
-class NimbusLayer(nn.Module):
+class NimbusLayer():
     count = 0
 
     def __init__(self):
-        super(NimbusLayer, self).__init__()
+        # super().__init__()
+        # print("inner nimbus layer init")
         self.state = Parameter(torch.tensor(defines.NIMBUS_STATE_MATMUL_WITH_GRAD, dtype=torch.int32), requires_grad=False)
-        self.name = Parameter(torch.tensor(f'nimbus_layer_{NimbusLayer.count}', dtype=torch.string), requires_grad=False)
+        self.name:str = f'nimbus_layer_{NimbusLayer.count}'
         self.register_load_state_dict_post_hook(self.state_dict_hook)
         NimbusLayer.count += 1
 
@@ -147,27 +150,33 @@ class NimbusLayer(nn.Module):
 # 1. 正常线性状态，使用正常的矩阵乘法和加法操作
 # 2. MADDNESS反向传播状态，使用树状操作的矩阵，可以反向传播
 # 3. MADDNESS only状态，使用直接的树状操作，不能反向传播
-class NimbusLinear(NimbusLayer, nn.Linear):
-    def __init__(self, in_features, out_features, bias=True, state=defines.NIMBUS_STATE_MATMUL_WITH_GRAD
+class NimbusLinear(Linear, NimbusLayer):
+# class NimbusLinear(Linear, NimbusLayer):
+    def __init__(self, in_features, out_features, bias=False, state=defines.NIMBUS_STATE_MATMUL_WITH_GRAD
                  , codeblockCount=-1, treeDepth=4):
-        super(NimbusLinear, self).__init__()
-        nn.Linear.__init__(self, in_features, out_features, bias)
+        print("start nimbus linear init, in_features:", in_features, "out_features:", out_features, "bias:", bias, "state:", state, "codeblockCount:", codeblockCount, "treeDepth:", treeDepth)
+        super().__init__(in_features=in_features, out_features=out_features, bias=bias)
+        # print("start nimbus layer init")
+        NimbusLayer.__init__(self)
         # 下面的参数名应该可以解释他们自己是什么
         self.curComputeState = Parameter(torch.tensor(state, dtype=torch.int32), requires_grad=False)
-        self.name = Parameter(torch.tensor(f'nimbus_linear_{NimbusLayer.count-1}', dtype=torch.string), requires_grad=False)
+        self.name:str = f'nimbus_linear_{NimbusLayer.count-1}'
         self.treeDepth = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
         self.bucketsPerBlock = 2 ** treeDepth
         # the LUT for MADDNESS
-        self.lut = Parameter(torch.zeros(1, dtype=torch.bool), requires_grad=True)
-        self.selectionMatrix = Parameter(torch.zeros(1), requires_grad=False)
-        self.selectionMatrix = create_selection_matrix(C=codeblockCount, K=16)
+        self.lut = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
+
+        if codeblockCount == -1:
+            codeblockCount = in_features//2
+
+        self.selectionMatrix:torch.Tensor = Parameter(create_selection_matrix(C=codeblockCount, K=16), requires_grad= True)
         # how many codeblocks a row of input is divided into, noted as "C" in the maddness paper
         self.codeblockCount = Parameter(torch.tensor(codeblockCount, dtype=torch.int32), requires_grad=False)
         # the matrix describing the tree structure, use it to matmul could get value of bucket data should get into.
         # it's a 2D matrix, a diagonalized sparse matrix
         self.treeDesMat = Parameter(create_4layer_tree_des_matrix(), requires_grad=False)
         self.dims = Parameter(torch.zeros(1, dtype=torch.int32), requires_grad=False)
-        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=True)
+        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
         self.offset = Parameter(torch.Tensor([0.0]), requires_grad=False)
         self.scale = Parameter(torch.Tensor([1.0]), requires_grad=False)
         # a one time flag to record the input, used for saving the input for MADDNESS
@@ -315,7 +324,7 @@ class NimbusLinear(NimbusLayer, nn.Linear):
             于是我们重新开启了训练，这时候我们就需要把上一次的输入缓存文件加载进来，然后继续往下做DM化。
             如果是一次性从预训练跑到DM化，那recorded_input就已经在内存对象里了，不需要加载。
         """
-        return os.path.combine(defines.NIMBUS_RECORD_PATH, f'input_{self.name}_latest.npy'), os.path.combine(defines.NIMBUS_RECORD_PATH, f'input_{self.name}_{time.time()}.npy')
+        return os.path.combine(defines.INPUT_CACHE_PATH_ROOT, f'input_{self.name}_latest.npy')
 
 class NimbusConv1d(NimbusLayer, nn.Conv1d):
     pass

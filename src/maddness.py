@@ -7,7 +7,7 @@
 import resource
 import copy
 import traceback
-from typing import List, Optional, Union, Tuple
+from typing import List, Literal, Optional, Union, Tuple
 import numpy as np
 import numba
 from sklearn import linear_model

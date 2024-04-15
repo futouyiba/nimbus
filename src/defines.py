@@ -1,8 +1,7 @@
 import os
-import models
 
 #region path settings
-CWD_PREFIX = "."
+CWD_PREFIX = ".."
 
 DATA_PATH_ROOT = "data"
 LOGS_PATH_ROOT = "logs"
@@ -47,6 +46,10 @@ NIMBUS_STATE_DM_NO_GRAD = -4
 # 这个状态下，依然使用selection matrix、treeDesMatrix，因此可微、接受梯度，但使用8位定点数取代浮点、用
 # 暂时不用。
 NIMBUS_STATE_DM_OPT = -5
+
+# 录制input状态。在这个状态下，Nimbus层会记录输入数据，以便在后续的DM化过程中使用。
+# 前期不使用此状态，直接使用record once变量。
+NIMBUS_STATE_RECORD_INPUT = -1
 #endregion
 
 #region Consts:Usage
