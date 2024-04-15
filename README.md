@@ -21,7 +21,7 @@ We've done several improvement, among which we're most proud of that we solve th
 1. 嵌入场景：比如在网络硬件、IOT设备当中，计算资源
 2. 大模型：模型大了之后，推理速度会变得很慢，比如BERT、GPT等模型。用户希望能够在保证模型精度的情况下，提高模型的推理速度。 
 
-近年来围绕D Blalock的论文《Multiplying Matrices without Multiplying》的研究，使用LUT（Look-Up Table）来加速矩阵乘法的计算，取得了很好的效果。我们希望能够将这种方法应用到神经网络的推理过程中，提高神经网络的推理速度。
+近年来围绕Davis Blalock的论文《Multiplying Matrices without Multiplying》的研究，使用LUT（Look-Up Table）来加速矩阵乘法的计算，取得了很好的效果。我们希望能够将这种方法应用到神经网络的推理过程中，提高神经网络的推理速度。
 
 
 There are two scenarios that have high requirements for the inference speed of the model:
@@ -46,6 +46,13 @@ TBW
 是否应该直接使用Differentiable MADDNESS构建神经网络，直接开始训练？
 - 不应该。经过探索，我们发现使用differentiable MADDNESS（下文简称为MD）进行训练有非常大的性能消耗，在层数我们发现分桶（MADDNESS概念）、LUT初始值都需要一个表现还不错的神经网络提供支持。
 如何让训练过程不严重失速？
+### Computing 运算
+Cumulonimbus程序的核心是NimbusLayer，它可以在几种运算模式中切换。具体可见《modules.py》 TODO 加入文件链接
+
+#### MADDNESS模式
+MADDNESS模式的计算方式与《Multiplying Matrices Without Multiplying》中一样
+#### DM模式（Differential MADDNESS）（可微的MADDNESS）
+ **使用爱因斯坦矩阵和**而非对角化
 ### Procedures 过程
 训练过程分为几个阶段：
 - 初训。首先使用普通的矩阵乘法、神经网络、反向传播，来获得一个训练基准。这个阶段主要达成几个目的：

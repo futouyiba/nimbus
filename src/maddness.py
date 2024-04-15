@@ -576,43 +576,6 @@ class Bucket:
         return max(0, np.sum(self.col_sum_sqs()))
 
 
-def create_codebook_start_end_idxs(X, number_of_codebooks, algo="start"):
-    """
-    returns vector (C, 2)
-    [
-      start_idx_0, end_idx_0,
-      start_idx_1, end_idx_1,
-      ...
-    ]
-    """
-    assert algo in ("start", "end")
-
-    _, D = X.shape
-    number_of_codebooks = int(number_of_codebooks)
-    assert D >= number_of_codebooks
-
-    idxs = np.empty((number_of_codebooks, 2), dtype=np.int64)
-    full_subvec_len = D // number_of_codebooks
-    start_idx = 0
-    for c in range(number_of_codebooks):
-        subvec_len = full_subvec_len
-        if algo == "start":  # wider codebooks at the start
-            if c < (D % number_of_codebooks):
-                subvec_len += 1
-        elif algo == "end":  # wider codebooks at the end
-            if (number_of_codebooks - c - 1) < (D % number_of_codebooks):
-                subvec_len += 1
-        end_idx = min(D, start_idx + subvec_len)
-        idxs[c, 0] = start_idx
-        idxs[c, 1] = end_idx
-
-        start_idx = end_idx
-
-    assert idxs[0, 0] == 0
-    assert idxs[-1, -1] == D
-    return idxs
-
-
 def learn_binary_tree_splits(
     X: np.ndarray,
     K: int = 16,

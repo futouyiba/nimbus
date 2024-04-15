@@ -24,157 +24,177 @@ from modules import NimbusLayer, NimbusLinear
 # import webbrowser
 import subprocess
 
-# TODO put these into function body instead of global variables
-LastDMizedLayer:NimbusLayer = None
-CurDMizedLayer:NimbusLayer = None
-GlobalBestAccuracy = 0.0
-StepBestAccuracy = 0.0
-# 当前进行到的步骤。1为普通训练，2为DM化，3为微调，4为评估MADDNESS only。其中特殊的是DM化，它是一个逐层的过程，每一层都会进行一次DM化。这时会加上0.01
-# 举例：2.01为第一层DM化，2.02为第二层DM化，以此类推。
-curStep = 0.0
 
+class TrainProcedure:
+    """把训练过程封装成一个类，方便管理。
+        这个类使用单例模式，让其他类都能访问到这个类的实例。
 
-modelDataCombined = f"{arg_settings.TrainModel._get_name}-{arg_settings.DataPath}"
-procedure_start_time = time.time()
-procedure_name = modelDataCombined + f'-{procedure_start_time}'
-runPath = f'{RUNS_PATH_ROOT}/{procedure_name}'
-writer = SummaryWriter(runPath)
-checkpointPath = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, modelDataCombined)
+    """
 
-# 启动TensorBoard
-tensorboard_process = subprocess.Popen(['tensorboard', '--logdir', RUNS_PATH_ROOT])
-
-
-def SaveInputCache(model: nn.Module):
-    pass
-
-def train_epochs(model: nn.Module, epochs:int, start_epoch:int=0):
-    print(f"Training model {model} for {epochs} epochs, starting from epoch {start_epoch}.")
-    StepBestAccuracy = 0.0
-    trainStepStartTime = time.time()
-    for epoch in range(start_epoch, start_epoch+epochs):
-        print(f"Epoch {epoch} started.")
-        model.train()
-        arg_settings.Optimizer.zero_grad()
-        # batch training
-        for i, (data, target) in enumerate(arg_settings.TrainDataLoader):
-            data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
-            output = model(data)
-            loss = arg_settings.Criterion(output, target)
-            writer.add_scalar('training loss', loss, epoch)
-            loss.backward()
-            arg_settings.Optimizer.step()
-            arg_settings.Optimizer.zero_grad()
-            acc = (output.argmax(dim=1) == target).float().mean()
-            writer.add_scalar('training accuracy', acc, epoch)
-        # evaluate on test set
-        test_acc = evaluate_model(model, epoch=epoch)
-        print(f"Epoch {epoch} finished. Test accuracy: {test_acc}")
-    print(f"Training {curStep} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
-    # TODO 把这些路径整理一下。现在先专注于功能，后续再整理路径。
-    torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step_model_epoch{epoch}.pth")
-
-def evaluate_model(model: nn.Module, epoch:int,)->float:
-    model.eval()
-    with torch.inference_mode():
-        correct = 0
-        total = 0
-        for data, target in arg_settings.TestDataLoader:
-            data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
-            output = model(data)
-            _, predicted = torch.max(output.data, 1)
-            total += target.size(0)
-            correct += (predicted == target).sum().item()
-        acc = 100 * correct / total
-        writer.add_scalar('test accuracy', acc, epoch)
-
-
-        if(acc>StepBestAccuracy):
-            StepBestAccuracy = acc
-            torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step{curStep}_best_model_epoch{epoch}_{acc}.pth")
-        if(acc>GlobalBestAccuracy):
-            GlobalBestAccuracy = acc
-            torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/global_best_model_epoch{epoch}_{acc}.pth")
-        return acc
-
-# 把模型中某一层替换为可微的MADDNESS层，锁定其他层不进行更新。这个过程supposedly被逐个使用，比如一个3层网络，在第一层DM化（differentiable MADDNESS化）之后，
-# 第一层以MADDNESS only的方式进行推导，且不接受梯度更新，第二层以DM的方式进行推导，且接受梯度更新，第三层以普通mm的方式进行推导，不接受梯度更新。
-# 这样保持了一定的速度，又能逐层的进行DM化，完成量化后重训练。
-# Substitutes a layer in the model with a differentiable MADDNESS layer, and locks other layers for gradient update.
-# This process is supposed to be used iteratively, for example, a 3-layer network, after the first layer is DM-ized (differentiable MADDNESS-ized),
-# the first layer is derived in MADDNESS only mode, and does not accept gradient updates, the second layer is derived in DM mode, and accepts gradient updates,
-# the third layer is derived in normal mm mode, and does not accept gradient updates.
-# This way, a certain speed is maintained, and the DM-ization is done layer by layer, and retraining is done after quantization.
-def DM_next_layer(model: NimbusModel)->bool:
-    nimbusLayers = model.get_nimbus_layers()
+    # 单例模式
+    _instance = None
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(TrainProcedure, cls).__new__(cls)
+        return cls._instance
     
-    if LastDMizedLayer is None:
-        CurDMizedLayer = nimbusLayers[0]
-    else:
-        LastDMizedLayer = CurDMizedLayer
-        if nimbusLayers.index(LastDMizedLayer) == len(nimbusLayers) - 1:
-            return False
-        CurDMizedLayer = nimbusLayers[nimbusLayers.index(LastDMizedLayer) + 1]
+    @classmethod
+    def get_instance(cls):
+        if not cls._instance:
+            cls._instance = cls()
+        return cls._instance
 
-    LastDMizedLayer.set_state(NIMBUS_STATE_MADDNESS_ONLY)
-    CurDMizedLayer.set_state(NIMBUS_STATE_DM_BACKPROP)
+    def __init__(self):
+        # TODO put these into function body instead of global variables
+        self.LastDMizedLayer: NimbusLayer = None
+        self.CurDMizedLayer: NimbusLayer = None
+        self.GlobalBestAccuracy = 0.0
+        self.StepBestAccuracy = 0.0
+        # 当前进行到的步骤。1为普通训练，2为DM化，3为微调，4为评估MADDNESS only。其中特殊的是DM化，它是一个逐层的过程，每一层都会进行一次DM化。这时会加上0.01
+        # 举例：2.01为第一层DM化，2.02为第二层DM化，以此类推。
+        self.curStep = 0.0
+
+        self.modelDataCombined = f"{arg_settings.TrainModel._get_name}-{arg_settings.DataPath}"
+        self.procedure_start_time = time.time()
+        self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
+        self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
+        self.writer = SummaryWriter(self.runPath)
+        self.checkpointPath = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
+
+        # 启动TensorBoard
+        self.tensorboard_process = subprocess.Popen(['tensorboard', '--logdir', RUNS_PATH_ROOT])
 
 
-def lock_all_nimbus_layers(model: NimbusModel):
-    nimbusLayers = model.get_nimbus_layers()
-    for i in range(len(nimbusLayers)):
-        layer = nimbusLayers[i]
-        # prevent gradient update
-        for param in layer.parameters():
-            param.requires_grad = False
-
-def nimbus_layer_require_grad(layer: NimbusLinear):
-    layer.lut.requires_grad = True
-    layer.thresholds.requires_grad = True
-    layer.bias.requires_grad = True
-    layer.weight.requires_grad = True
-
-def train_procedure():
-    model = arg_settings.TrainModel  # Assign the value of arg_settings.TrainModel to the variable model
-    model = model.to(arg_settings.Device)
-    model.train()
-
-    nimbusLayers = model.get_nimbus_layers()
-
-    #region data
-
-    #region training
-    if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
-        # train the model
-        train_epochs(model)
-        SaveInputCache(model)
+    def SaveInputCache(self, model: nn.Module):
         pass
-    if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
-        # replace each layer with differentiable MADDNESS layer, and retrain model iteratively
-        for l in nimbusLayers:
-            DM_next_layer(model)
-            train_epochs(model)
-        pass
-    if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
-        # fine tune the model
-        for l in nimbusLayers:
-            l.set_state(NIMBUS_STATE_DM_BACKPROP)
-        train_epochs(model)
-        pass
-    if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
-        # evaluate maddness-only model
-        for l in nimbusLayers:
-            l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
-        evaluate_model(model)
-        pass
-    #endregion
 
-    writer.close()
-    tensorboard_process.terminate()
+    def train_epochs(self, model: nn.Module, epochs:int, start_epoch:int=0):
+        print(f"Training model {model} for {epochs} epochs, starting from epoch {start_epoch}.")
+        StepBestAccuracy = 0.0
+        trainStepStartTime = time.time()
+        for epoch in range(start_epoch, start_epoch+epochs):
+            print(f"Epoch {epoch} started.")
+            model.train()
+            arg_settings.Optimizer.zero_grad()
+            # batch training
+            for i, (data, target) in enumerate(arg_settings.TrainDataLoader):
+                data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
+                output = model(data)
+                loss = arg_settings.Criterion(output, target)
+                self.writer.add_scalar('training loss', loss, epoch)
+                loss.backward()
+                arg_settings.Optimizer.step()
+                arg_settings.Optimizer.zero_grad()
+                acc = (output.argmax(dim=1) == target).float().mean()
+                self.writer.add_scalar('training accuracy', acc, epoch)
+            # evaluate on test set
+            test_acc = self.evaluate_model(model, epoch=epoch)
+            print(f"Epoch {epoch} finished. Test accuracy: {test_acc}")
+        print(f"Training {self.curStep} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
+        # TODO 把这些路径整理一下。现在先专注于功能，后续再整理路径。
+        torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step_model_epoch{epoch}.pth")
+
+    def evaluate_model(self, model: nn.Module, epoch:int,)->float:
+        model.eval()
+        with torch.inference_mode():
+            correct = 0
+            total = 0
+            for data, target in arg_settings.TestDataLoader:
+                data, target = data.to(arg_settings.Device), target.to(arg_settings.Device)
+                output = model(data)
+                _, predicted = torch.max(output.data, 1)
+                total += target.size(0)
+                correct += (predicted == target).sum().item()
+            acc = 100 * correct / total
+            self.writer.add_scalar('test accuracy', acc, epoch)
+
+
+            if(acc>self.StepBestAccuracy):
+                self.StepBestAccuracy = acc
+                torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/step{self.curStep}_best_model_epoch{epoch}_{acc}.pth")
+            if(acc>self.GlobalBestAccuracy):
+                self.GlobalBestAccuracy = acc
+                torch.save(model.state_dict(), f"{arg_settings.MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel._get_name}/global_best_model_epoch{epoch}_{acc}.pth")
+            return acc
+
+    # 把模型中某一层替换为可微的MADDNESS层，锁定其他层不进行更新。这个过程supposedly被逐个使用，比如一个3层网络，在第一层DM化（differentiable MADDNESS化）之后，
+    # 第一层以MADDNESS only的方式进行推导，且不接受梯度更新，第二层以DM的方式进行推导，且接受梯度更新，第三层以普通mm的方式进行推导，不接受梯度更新。
+    # 这样保持了一定的速度，又能逐层的进行DM化，完成量化后重训练。
+    # Substitutes a layer in the model with a differentiable MADDNESS layer, and locks other layers for gradient update.
+    # This process is supposed to be used iteratively, for example, a 3-layer network, after the first layer is DM-ized (differentiable MADDNESS-ized),
+    # the first layer is derived in MADDNESS only mode, and does not accept gradient updates, the second layer is derived in DM mode, and accepts gradient updates,
+    # the third layer is derived in normal mm mode, and does not accept gradient updates.
+    # This way, a certain speed is maintained, and the DM-ization is done layer by layer, and retraining is done after quantization.
+    def DM_next_layer(self, model: NimbusModel)->bool:
+        nimbusLayers = model.get_nimbus_layers()
+        
+        if self.LastDMizedLayer is None:
+            self.CurDMizedLayer = nimbusLayers[0]
+        else:
+            self.LastDMizedLayer = self.CurDMizedLayer
+            if nimbusLayers.index(self.LastDMizedLayer) == len(nimbusLayers) - 1:
+                return False
+            self.CurDMizedLayer = nimbusLayers[nimbusLayers.index(self.LastDMizedLayer) + 1]
+
+        self.LastDMizedLayer.set_state(NIMBUS_STATE_MADDNESS_ONLY)
+        self.CurDMizedLayer.set_state(NIMBUS_STATE_DM_BACKPROP)
+
+
+    def lock_all_nimbus_layers(self, model: NimbusModel):
+        nimbusLayers = model.get_nimbus_layers()
+        for i in range(len(nimbusLayers)):
+            layer = nimbusLayers[i]
+            # prevent gradient update
+            for param in layer.parameters():
+                param.requires_grad = False
+
+    def nimbus_layer_require_grad(self, layer: NimbusLinear):
+        layer.lut.requires_grad = True
+        layer.thresholds.requires_grad = True
+        layer.bias.requires_grad = True
+        layer.weight.requires_grad = True
+
+    def start(self):
+        model = arg_settings.TrainModel  # Assign the value of arg_settings.TrainModel to the variable model
+        model = model.to(arg_settings.Device)
+        model.train()
+
+        nimbusLayers = model.get_nimbus_layers()
+
+        #region data
+
+        #region training
+        if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
+            # train the model
+            self.train_epochs(model)
+            self.SaveInputCache(model)
+            pass
+        if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
+            # replace each layer with differentiable MADDNESS layer, and retrain model iteratively
+            for l in nimbusLayers:
+                self.DM_next_layer(model)
+                self.train_epochs(model)
+            pass
+        if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
+            # fine tune the model
+            for l in nimbusLayers:
+                l.set_state(NIMBUS_STATE_DM_BACKPROP)
+            self.train_epochs(model)
+            pass
+        if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
+            # evaluate maddness-only model
+            for l in nimbusLayers:
+                l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
+            self.evaluate_model(model)
+            pass
+        #endregion
+
+        self.writer.close()
+        self.tensorboard_process.terminate()
 
 
 if __name__ == "main":
-    train_procedure()
+    TrainProcedure().start()
     print("=====================================================================================")
     print("Training finished.")
     print("=====================================================================================")
