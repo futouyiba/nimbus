@@ -23,6 +23,8 @@ from models import NimbusModel
 from modules import NimbusLayer, NimbusLinear
 # import webbrowser
 import subprocess
+import atexit
+import subprocess
 
 
 class TrainProcedure:
@@ -59,7 +61,8 @@ class TrainProcedure:
         self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
         self.writer = SummaryWriter(self.runPath)
-        self.checkpointPath = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
+        self.checkpointFolder = path.join(arg_settings.MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
+        self.checkpointLatestPath = path.join(self.checkpointFolder, f'{self.procedure_name}.pth')
 
         # 启动TensorBoard
         self.tensorboard_process = subprocess.Popen(['tensorboard', '--logdir', RUNS_PATH_ROOT])
@@ -189,12 +192,16 @@ class TrainProcedure:
             pass
         #endregion
 
+    def cleanup(self):
         self.writer.close()
         self.tensorboard_process.terminate()
 
 
 if __name__ == "main":
-    TrainProcedure().start()
+    trainInst = TrainProcedure()
+    trainInst.start()
+    atexit.register(trainInst.cleanup)
+
     print("=====================================================================================")
     print("Training finished.")
     print("=====================================================================================")
