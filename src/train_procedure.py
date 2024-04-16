@@ -61,8 +61,8 @@ class TrainProcedure:
         self.curStep = 0.0
         self.curEpoch = 0
 
-        self.modelDataCombined = f"{arg_settings.ModelInstance.__class__.__name__}-{arg_settings.DataPath}"
-        self.procedure_start_time = time.time()
+        self.modelDataCombined = f"{arg_settings.ModelInstance.__class__.__name__}-{arg_settings.DatasetName}"
+        self.procedure_start_time = time.strftime("%m%d%H%M", time.localtime(time.time()))
         self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
         self.writer = SummaryWriter(self.runPath)
@@ -247,7 +247,7 @@ class TrainProcedure:
             # evaluate maddness-only model
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
-            self.evaluate_model(model)
+            self.evaluate_model(model，1)
         #endregion
 
     def cleanup(self):
