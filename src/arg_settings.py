@@ -6,37 +6,25 @@ import models
 from os import path
 import defines
 from defines import STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS, STEP_DIFFERENTIABLE_MADDNESS_LAYERS, STEP_LINEAR_ONLY, STEP_EVALUATE_MADDNESS_ONLY
+HiddenSize1 = 32
+HiddenSize2 = 32
+LearningRate = 0.01
+BatchSize = 8192
+EpochsEach = 80
+WeightDecay = 0.0001
+Momentum = 0.9
+Device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+Optimizer = 'adam'
+LRScheduler = 'cosine'
+Criterion = 'cross_entropy'
+Model = 'perceptron2'
+Dataset = 'test_4'
 
-parser = argparse.ArgumentParser()
-
-# Add arguments for training settings
-parser.add_argument('--hidden_size1', type=int, default=32, help='Size of the first hidden layer')
-parser.add_argument('--hidden_size2', type=int, default=32, help='Size of the second hidden layer')
-parser.add_argument('--learning_rate', type=float, default=0.01, help='Initial learning rate')
-parser.add_argument('--batch_size', type=int, default=8192, help='Batch size')
-parser.add_argument('--epochs', type=int, default=80, help='Number of epochs')
-parser.add_argument('--weight_decay', type=float, default=0.0001, help='Weight decay')
-parser.add_argument('--momentum', type=float, default=0.9, help='Momentum')
-parser.add_argument('--device', type=str, default='cuda:0' if torch.cuda.is_available() else 'cpu', help='Device to use')
-parser.add_argument('--optimizer', type=str, default='adam', help='Optimizer')
-parser.add_argument('--lr_scheduler', type=str, default='cosine', help='Learning rate scheduler')
-parser.add_argument('--criterion', type=str, default='cross_entropy', help='Loss criterion')
-parser.add_argument('--model', type=str, default='perceptron2', help='Model to use')
-parser.add_argument('--dataset', type=str, default='test_4', help='Dataset to use')
-
-args = parser.parse_args()
-
-    
-TrainProcessesInChain = STEP_LINEAR_ONLY   # 0001
+TrainProcessesInChain = STEP_LINEAR_ONLY | STEP_DIFFERENTIABLE_MADDNESS_LAYERS | STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS | STEP_EVALUATE_MADDNESS_ONLY  # 1111
 # TrainProcessesInChain = STEP_LINEAR_ONLY | STEP_DIFFERENTIABLE_MADDNESS_LAYERS | STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS   # 0111
-InitialLearningRate = args.learning_rate
-BatchSize = args.batch_size
-EpochsEach = args.epochs
-WeightDecay = args.weight_decay
-Momentum = args.momentum
-Device = torch.device(args.device)
+InitialLearningRate = LearningRate
 
-DataPath = path.join(defines.DATA_PATH_ROOT, args.dataset)
+DataPath = path.join(defines.DATA_PATH_ROOT, Dataset)
 TestData = torch.load(path.join(DataPath, 'test_data.pt'))
 TestLabels = torch.load(path.join(DataPath, 'test_labels.pt'))
 TestDataset = torch.utils.data.TensorDataset(TestData, TestLabels)
@@ -56,16 +44,16 @@ input_size = TestData.size(1)  # 获取testData的列数
 # 获取testLabels当中的种类数
 num_classes = len(torch.unique(target))
 
-TrainModel:models.NimbusModel   
-if args.model == 'perceptron2':
-    TrainModel = models.Perceptron2(input_size, num_classes, hidden_size1=args.hidden_size1, hidden_size2=args.hidden_size2)
+ModelInstance:models.NimbusModel   
+if Model == 'perceptron2':
+    ModelInstance = models.Perceptron2(input_size, num_classes, hidden_size1=HiddenSize1, hidden_size2=HiddenSize2)
 else:
-    TrainModel = None
+    ModelInstance = None
 
-if args.optimizer == 'adam':
-    Optimizer = torch.optim.Adam(TrainModel.parameters(), lr=InitialLearningRate, weight_decay=WeightDecay, betas=(Momentum, 0.999))
+if Optimizer == 'adam':
+    Optimizer = torch.optim.Adam(ModelInstance.parameters(), lr=InitialLearningRate, weight_decay=WeightDecay, betas=(Momentum, 0.999))
 LRScheduler:torch.optim.lr_scheduler.LRScheduler
-if args.lr_scheduler == 'cosine':
+if LRScheduler == 'cosine':
     LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(Optimizer, T_max=EpochsEach, eta_min=0.0001)
 else:
     LRScheduler = None

@@ -1,16 +1,16 @@
 from torch import nn
 from torch.nn import init
-from modules import NimbusLinear
+from modules import NimbusLayer, NimbusLinear
 
 class NimbusModel(nn.Module):
     def __init__(self) -> None:
         super(NimbusModel, self).__init__()
         self.nimbus_layers = []
 
-    def get_nimbus_layers(self)->list[NimbusLinear]:
+    def get_nimbus_layers(self)->list[NimbusLayer]:
         if len(self.nimbus_layers) == 0:
             for module in self.modules():
-                if isinstance(module, NimbusLinear):
+                if isinstance(module, NimbusLayer):
                     self.nimbus_layers.append(module)
         return self.nimbus_layers
 
@@ -38,5 +38,5 @@ class Perceptron2(NimbusModel):
         x = self.linear3(x)
         return x
     
-    def get_nimbus_layers(self):
-        return [self.linear1, self.linear2, self.linear3]
+    # def get_nimbus_layers(self):
+        # return [self.linear1, self.linear2, self.linear3]

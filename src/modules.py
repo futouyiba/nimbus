@@ -9,11 +9,12 @@ import defines
 import numpy as np
 import maddness
 from maddness import Bucket, MultiSplit
+import arg_settings
 
 
 # create a diagonalized sparse matrix, which can be used to do selection of data
 def create_selection_matrix(
-        C: int = 1, K: int = 16, dtype=torch.float16
+        C: int = 1, K: int = 16, dtype=torch.float32
 ) -> torch.Tensor:
     depth = int(math.sqrt(K))
     selection_matrix = torch.zeros((C * 15, C * depth), dtype=dtype)
@@ -32,7 +33,7 @@ def create_selection_matrix(
 
 # create a diagonalized sparse matrix, which can be used to do tree-like operations
 # for now we only use 4 layer tree, with K = 16
-def create_4layer_tree_des_matrix(C: int = 1, dtype=torch.float16) -> torch.Tensor:
+def create_4layer_tree_des_matrix(C: int = 1, dtype=torch.float32) -> torch.Tensor:
     # example when using C = 1
     # fmt: off
     K = 16
@@ -123,7 +124,7 @@ class NimbusLayer():
     def __init__(self):
         # super().__init__()
         # print("inner nimbus layer init")
-        self.state = Parameter(torch.tensor(defines.NIMBUS_STATE_MATMUL_WITH_GRAD, dtype=torch.int32), requires_grad=False)
+        self.curComputeState = defines.NIMBUS_STATE_MATMUL_WITH_GRAD
         self.name:str = f'nimbus_layer_{NimbusLayer.count}'
         self.register_load_state_dict_post_hook(self.state_dict_hook)
         NimbusLayer.count += 1
@@ -159,10 +160,11 @@ class NimbusLinear(Linear, NimbusLayer):
         # print("start nimbus layer init")
         NimbusLayer.__init__(self)
         # 下面的参数名应该可以解释他们自己是什么
-        self.curComputeState = Parameter(torch.tensor(state, dtype=torch.int32), requires_grad=False)
+        self.curComputeState = state
         self.name:str = f'nimbus_linear_{NimbusLayer.count-1}'
         self.treeDepth = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
-        self.bucketsPerBlock = 2 ** treeDepth
+        bucketsPerBlock = 2 ** treeDepth
+        self.bucketsPerBlock = Parameter(torch.tensor(bucketsPerBlock, dtype=torch.int32), requires_grad=False)
         # the LUT for MADDNESS
         self.lut = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
 
@@ -174,19 +176,20 @@ class NimbusLinear(Linear, NimbusLayer):
         self.codeblockCount = Parameter(torch.tensor(codeblockCount, dtype=torch.int32), requires_grad=False)
         # the matrix describing the tree structure, use it to matmul could get value of bucket data should get into.
         # it's a 2D matrix, a diagonalized sparse matrix
-        self.treeDesMat = Parameter(create_4layer_tree_des_matrix(), requires_grad=False)
-        self.dims = Parameter(torch.zeros(1, dtype=torch.int32), requires_grad=False)
+        self.treeDesMat = Parameter(create_4layer_tree_des_matrix(self.codeblockCount.item()), requires_grad=False)
+        self.dims = Parameter(torch.zeros((self.selectionMatrix.shape[0],1), dtype=torch.int32), requires_grad=False)
         self.thresholds = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
         self.offset = Parameter(torch.Tensor([0.0]), requires_grad=False)
         self.scale = Parameter(torch.Tensor([1.0]), requires_grad=False)
         # a one time flag to record the input, used for saving the input for MADDNESS
         # the reason MADDNESS needs it is that buckets should be calculated based on the input, and LUT should be calculated based on the input
         self.want_to_record_once = False
-        self.recorded_input = None
+        self.recorded_input:torch.Tensor = None
         # self.split_factor = 1
-        self.register_load_state_dict_post_hook(self.state_dict_hook)
+        # self.register_load_state_dict_post_hook(self.state_dict_hook)
         # TODO 这一层管理的其他层，例如BN层、激活层等，在做高度优化的时候，会被替换为LUT
         self.managed_layers = []
+        self.all_splits = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=False)
 
     def forward(self, inputMatrix):
         # do a state switch
@@ -194,17 +197,18 @@ class NimbusLinear(Linear, NimbusLayer):
             if self.want_to_record_once:
                 self.recorded_input = inputMatrix
                 # save the input for MADDNESS to a numpy file
-                np.save(f'input_{self.name}.npy', inputMatrix.cpu().numpy())
+                np.save(self.get_record_input_path(), inputMatrix.cpu().numpy())
                 # one time only
                 self.want_to_record_once = False
             return nn.functional.linear(inputMatrix, self.weight, self.bias).to(inputMatrix.device)
-        elif self.curComputeState == defines.NIMBUS_STATE_MADDNESS_BACKPROP:
+        elif self.curComputeState == defines.NIMBUS_STATE_DM_BACKPROP:
             # bunch of math ops here, Straight-Through Estimator (STE) is used to approximate the gradient
             # use selection matrix and thresholds to get the chosen elements
             # then do the tree-like operations using the treeDesMat
             # then do the approximate matmul with LUT
-            chosen_elements = inputMatrix[:, self.dims]
-            subtracted = self.selectionMatrix.mm(chosen_elements.T) - self.thresholds
+            chosen_elements:torch.Tensor = inputMatrix[:, self.dims]
+            transposedChosen = chosen_elements.T
+            subtracted = self.selectionMatrix.mm(transposedChosen) - self.thresholds
             tanh_h = torch.tanh(subtracted)
             sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h
             tree_result = self.treeDesMat.mm(sign_ste)
@@ -220,7 +224,15 @@ class NimbusLinear(Linear, NimbusLayer):
             # put out tensor to the same device as inputMatrix
             out = out.to(inputMatrix.device)
         elif self.curComputeState == defines.NIMBUS_STATE_MADDNESS_ONLY:
-            return self.forward_maddness_only(input)
+            # TODO 优化、缓存、加速
+            # 1. 缓存cpu上的numpy数组，用于MADDNESS的计算
+            # 2. 在读取的时候作特殊处理
+            # 3. （后续）将所有maddness的计算放到GPU上
+            # encoded = maddness.halut_encode_opt(inputMatrix.cpu().numpy(), self.all_splits.cpu().numpy())
+            # TODO 暂时使用matmul计算，先跑通锁层训练
+            out = nn.functional.linear(inputMatrix, self.weight,self.bias).to(inputMatrix.device)
+            # maddness.
+            # return self.forward_maddness_only(input)
         else:
             raise ValueError("Invalid state")
 
@@ -249,25 +261,32 @@ class NimbusLinear(Linear, NimbusLayer):
             self.lut.requires_grad = True
             self.thresholds.requires_grad = True
             self.weight.requires_grad = False
-            self.bias.requires_grad = False
+            if self.bias is not None:
+                self.bias.requires_grad = False
         elif newState == defines.NIMBUS_STATE_MADDNESS_ONLY:
             self.lut.requires_grad = False
             self.thresholds.requires_grad = False
             self.weight.requires_grad = False
-            self.bias.requires_grad = False
+            if self.bias is not None:
+                self.bias.requires_grad = False
         elif newState == defines.NIMBUS_STATE_MATMUL_WITH_GRAD:
             self.lut.requires_grad = False
             self.thresholds.requires_grad = False
             self.weight.requires_grad = True
-            self.bias.requires_grad = True
+            if self.bias is not None:
+                self.bias.requires_grad = True
         elif newState == defines.NIMBUS_STATE_MATMUL_NO_GRAD:
             self.lut.requires_grad = False
             self.thresholds.requires_grad = False
             self.weight.requires_grad = False
-            self.bias.requires_grad = False
+            if self.bias is not None:
+                self.bias.requires_grad = False
         elif newState == defines.NIMBUS_STATE_DM_OPT:
             pass
         
+        if self.curComputeState == defines.NIMBUS_STATE_MATMUL_WITH_GRAD and newState == defines.NIMBUS_STATE_DM_BACKPROP:
+            self.learn_maddness_params(self.recorded_input.cpu().numpy())
+
         if self.curComputeState == defines.NIMBUS_STATE_DM_BACKPROP and newState != defines.NIMBUS_STATE_DM_BACKPROP:
             # do some cleanup
             # state transition specific logic here
@@ -299,10 +318,16 @@ class NimbusLinear(Linear, NimbusLayer):
 
         此方法根据输入数据矩阵X以及self的成员变量计算MADDNESS参数。
         """
-        all_splits_np, all_prototypes, report_array, thresholds, dims = maddness.learn_proto_and_hash_function(X, self.codeblockCount, self.bucketsPerBlock)
-        self.dims = torch.Tensor(dims, dtype=torch.int32)
-        self.thresholds = torch.Tensor(thresholds, dtype=torch.float32)
-        self.lut = torch.tensor( maddness.maddness_lut(self.weight, all_prototypes= all_prototypes))
+        all_splits_np, all_prototypes, _, thresholds, dims = maddness.learn_proto_and_hash_function(X, self.codeblockCount.item(), self.bucketsPerBlock.item())
+        self.dims.data = torch.from_numpy(dims).to(arg_settings.Device)
+        self.thresholds.data = torch.from_numpy(thresholds).unsqueeze(1).to(arg_settings.Device)
+        # lut_numpy = maddness.maddness_lut(self.weight.cpu(), all_prototypes= all_prototypes)
+        B = self.weight.cpu().numpy()
+        lut_numpy = np.zeros((B.shape[0], self.codeblockCount.item(), self.bucketsPerBlock.item()))
+        for i, q in enumerate(B):
+            lut_numpy[i] = maddness.maddness_lut(q, all_prototypes)
+        self.lut.data = torch.from_numpy(lut_numpy).float().to(arg_settings.Device)
+        self.all_splits.data = torch.from_numpy(all_splits_np).to(arg_settings.Device)
         
     def load_recorded_input(self):
         self.recorded_input = np.load(self.get_record_input_path())
@@ -324,7 +349,7 @@ class NimbusLinear(Linear, NimbusLayer):
             于是我们重新开启了训练，这时候我们就需要把上一次的输入缓存文件加载进来，然后继续往下做DM化。
             如果是一次性从预训练跑到DM化，那recorded_input就已经在内存对象里了，不需要加载。
         """
-        return os.path.combine(defines.INPUT_CACHE_PATH_ROOT, f'input_{self.name}_latest.npy')
+        return os.path.join(defines.INPUT_CACHE_PATH_ROOT, f'input_{self.name}_latest.npy')
 
 class NimbusConv1d(NimbusLayer, nn.Conv1d):
     pass

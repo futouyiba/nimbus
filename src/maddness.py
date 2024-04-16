@@ -274,7 +274,7 @@ def _fit_ridge_enc(A_enc=None, Y=None, K=16, lamda=1, X_binary=None):
 
     if X_binary is None:
         X_binary = sparsify_and_int8_A_enc(A_enc, K=K)
-    print(X_binary.shape, Y.shape)
+    # print(X_binary.shape, Y.shape)
     # X_binary_sparse = csr_matrix(X_binary) # will change solver from cholesky to sparse_cg
     est = linear_model.Ridge(
         fit_intercept=False, alpha=lamda, solver="auto", copy_X=False
@@ -344,7 +344,7 @@ def encoded_lstsq(
     precondition=True,
     stable_ridge=True,
 ):
-    print(f"encoded_lstsq called")
+    # print(f"encoded_lstsq called")
     # print(f"encoded_lstsq: {A_enc.shape} {X_binary.shape} {Y.shape} {K} {XtX} {XtY} {precondition} {stable_ridge}")
     traceback.print_stack()
 
@@ -696,7 +696,7 @@ def init_and_learn_hash_function(
 
     all_prototypes = np.zeros((C, K, D), dtype=np.float32)
     all_splits: list[list[MultiSplit]] = []
-    pq_idxs = create_codebook_start_end_idxs(X, C, algo=pq_perm_algo)
+    pq_idxs = create_codebook_start_end_idxs(D, C, algo=pq_perm_algo)
 
     # ------------------------ 0th iteration; initialize all codebooks
     all_splits = []
@@ -812,7 +812,7 @@ def learn_proto_and_hash_function(
 
 
 def maddness_lut(q: np.ndarray, all_prototypes: np.ndarray) -> np.ndarray:
-    print(f"madness_lut: {q.shape} {all_prototypes.shape}")
+    # print(f"madness_lut: {q.shape} {all_prototypes.shape}")
     q = q.reshape(1, 1, -1)  # all_prototypes is shape C, K, D
     return (q * all_prototypes).sum(axis=2)  # C, K
 
@@ -820,7 +820,7 @@ def maddness_lut(q: np.ndarray, all_prototypes: np.ndarray) -> np.ndarray:
 def maddness_quantize_luts(
     luts: np.ndarray, force_power_of_2: bool = True
 ) -> tuple[np.ndarray, float, float]:
-    print(f"maddness_quantize_luts: {luts.shape} {force_power_of_2}")
+    # print(f"maddness_quantize_luts: {luts.shape} {force_power_of_2}")
     mins = luts.min(axis=(0, 2))
     maxs = luts.max(axis=(0, 2))
 

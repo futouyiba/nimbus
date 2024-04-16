@@ -61,7 +61,7 @@ class TrainProcedure:
         self.curStep = 0.0
         self.curEpoch = 0
 
-        self.modelDataCombined = f"{arg_settings.TrainModel.__class__.__name__}-{arg_settings.DataPath}"
+        self.modelDataCombined = f"{arg_settings.ModelInstance.__class__.__name__}-{arg_settings.DataPath}"
         self.procedure_start_time = time.time()
         self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
@@ -70,8 +70,8 @@ class TrainProcedure:
         self.checkpointLatestPath = path.join(self.checkpointFolder, f'{self.procedure_name}.pth')
 
         # 启动TensorBoard
-        self.tensorboard_process = subprocess.Popen(['python', '-m', 'tensorboard.main', '--logdir', self.runPath])
-        self.nimbus_layers = arg_settings.TrainModel.get_nimbus_layers()
+        # self.tensorboard_process = subprocess.Popen(['python', '-m', 'tensorboard.main', '--logdir', self.runPath])
+        self.nimbus_layers = arg_settings.ModelInstance.get_nimbus_layers()
 
 
     def SaveInputCache(self, model: nn.Module):
@@ -99,6 +99,7 @@ class TrainProcedure:
         self.GlobalBestCheckpointPath = None
         trainStepStartTime = time.time()
         for epoch in range(start_epoch, start_epoch+epochs):
+            epoch_start_time = time.time()
             self.curEpoch = epoch
             print(f"Epoch {epoch} started.")
             epoch_training_loss = 0.0
@@ -126,12 +127,18 @@ class TrainProcedure:
             acc = 100 * correct / total
             self.writer.add_scalar('epoch/training_loss', epoch_training_loss, epoch)
             self.writer.add_scalar('crucial/training_acc', acc, epoch)
+            epoch_end_time = time.time()
+            elapsed_time = epoch_end_time - epoch_start_time
+            self.writer.add_scalar('crucial/epoch_time', elapsed_time, epoch)
             # evaluate on test set
             test_acc = self.evaluate_model(model, epoch=epoch)
             arg_settings.LRScheduler.step()
             print(f"Epoch {epoch} finished. Test accuracy: {test_acc}")
         print(f"Training {self.curStep:.2f} finished. Time elapsed: {time.time()-trainStepStartTime} seconds.")
         # TODO 把这些路径整理一下。现在先专注于功能，后续再整理路径。
+        # 重置scheduler & optimizer
+        arg_settings.Optimizer = torch.optim.Adam(model.parameters(), lr=arg_settings.InitialLearningRate, weight_decay=arg_settings.WeightDecay, betas=(arg_settings.Momentum, 0.999))
+        arg_settings.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(arg_settings.Optimizer, T_max=arg_settings.EpochsEach, eta_min=0.0001)
 
     def evaluate_model(self, model: nn.Module, epoch:int,)->float:
         model.eval()
@@ -155,13 +162,13 @@ class TrainProcedure:
                 self.StepBestAccuracy = acc
                 if self.StepBestCheckpointPath is not None:
                     os.remove(self.StepBestCheckpointPath)
-                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel.__class__.__name__}/step{self.curStep:.2f}_best_model_epoch{epoch}_{acc:.4f}.pth"
+                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/step{self.curStep:.1f}_best_model_epoch{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.StepBestCheckpointPath)
             if(acc>self.GlobalBestAccuracy):
                 self.GlobalBestAccuracy = acc
                 if self.GlobalBestCheckpointPath is not None:
                     os.remove(self.GlobalBestCheckpointPath)
-                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.TrainModel.__class__.__name__}/global_best_model_epoch{epoch}_{acc:.4f}.pth"
+                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/global_best_model_epoch{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.GlobalBestCheckpointPath)
             return acc
 
@@ -203,7 +210,7 @@ class TrainProcedure:
         layer.weight.requires_grad = True
 
     def start(self):
-        model = arg_settings.TrainModel  # Assign the value of arg_settings.TrainModel to the variable model
+        model = arg_settings.ModelInstance  # Assign the value of arg_settings.TrainModel to the variable model
         model = model.to(arg_settings.Device)
         model.train()
 
@@ -212,32 +219,40 @@ class TrainProcedure:
         #region training
         if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
             # train the model
+            step = 1
             self.train_epochs(model, arg_settings.EpochsEach)
             self.SaveInputCache(model)
-            pass
         if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
+            step = 2
             # replace each layer with differentiable MADDNESS layer, and retrain model iteratively
             for l in nimbusLayers:
-                self.DM_next_layer(model)
-                self.train_epochs(model)
-            pass
+                l.set_state(NIMBUS_STATE_MATMUL_WITH_GRAD)
+
+            for l in nimbusLayers:
+                self.CurDMizedLayer = l
+                l.set_state(NIMBUS_STATE_DM_BACKPROP)
+                if self.LastDMizedLayer is not None:
+                    self.LastDMizedLayer.set_state(NIMBUS_STATE_MADDNESS_ONLY)
+                # self.DM_next_layer(model)
+                self.train_epochs(model, arg_settings.EpochsEach)
+                self.LastDMizedLayer = l
         if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
+            step = 3
             # fine tune the model
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_DM_BACKPROP)
-            self.train_epochs(model)
-            pass
+            self.train_epochs(model, arg_settings.EpochsEach)
         if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
+            step = 4
             # evaluate maddness-only model
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
             self.evaluate_model(model)
-            pass
         #endregion
 
     def cleanup(self):
         self.writer.close()
-        self.tensorboard_process.terminate()
+        # self.tensorboard_process.terminate()
 
 
 if __name__ == "__main__":
