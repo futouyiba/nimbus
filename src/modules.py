@@ -272,17 +272,22 @@ class NimbusLinear(Linear, NimbusLayer):
             # 获取当前层的X数据
             cur_X = torch.gather(X_reshaped, 2, cur_dim_indices.unsqueeze(2).expand(N, C, 1))
             # 获取当前层的阈值
-            cur_threshold_values = torch.gather(threshold_values, 2, encoded.expand(N, C, K-1))
+            cur_threshold_values = torch.gather(threshold_values, 2, encoded)
+            # cur_threshold_values = torch.gather(threshold_values, 2, encoded.unsqueeze(2))
             # 比较生成二进制决策结果
             decisions = cur_X < cur_threshold_values
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
-            encoded = torch.where(decisions, encoded + encoded, encoded + encoded + torch.ones_like(encoded))
+            encoded = torch.where(decisions, encoded + encoded, encoded + encoded + torch.ones_like(encoded, dtype=torch.int64))
             
+        encoded = encoded - torch.ones_like(encoded, dtype=torch.int64)
         # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
             # 生成用于gather的索引
-        gather_indices = encoded.expand(-1, -1, M)
+        gather_indices = encoded.expand(N, C, 1, M)
+        lut_expanded = lut_view.unsqueeze(0).expand(N, C, K, M)
         # 从LUT中批量提取数据
-        out = torch.gather(lut_view, 1, gather_indices).sum(dim=1)
+        gathered = torch.gather(lut_expanded, 2, gather_indices) # (N,C, 1, M)
+        summed = gathered.sum(dim=1) # (N, 1, M)
+        out = summed.squeeze(1)
 
         return out
 
