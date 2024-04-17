@@ -63,11 +63,11 @@ class TrainProcedure:
 
         self.modelDataCombined = f"{arg_settings.ModelInstance.__class__.__name__}-{arg_settings.DatasetName}"
         self.procedure_start_time = time.strftime("%m%d%H%M", time.localtime(time.time()))
-        self.procedure_name = self.modelDataCombined + f'-{self.procedure_start_time}'
+        self.procedure_name = f"{self.modelDataCombined}-{arg_settings.runCodeName}-{self.procedure_start_time}"
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
         self.writer = SummaryWriter(self.runPath)
         self.checkpointFolder = path.join(MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
-        self.checkpointLatestPath = path.join(self.checkpointFolder, f'{self.procedure_name}.pth')
+        self.checkpointLatestPath = path.join(self.checkpointFolder, f'{arg_settings}-latest.pth')
 
         # 启动TensorBoard
         # self.tensorboard_process = subprocess.Popen(['python', '-m', 'tensorboard.main', '--logdir', self.runPath])
@@ -162,13 +162,13 @@ class TrainProcedure:
                 self.StepBestAccuracy = acc
                 if self.StepBestCheckpointPath is not None:
                     os.remove(self.StepBestCheckpointPath)
-                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/step{self.curStep:.1f}_best_model_epoch{epoch}_{acc:.2f}.pth"
+                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/{arg_settings.runCodeName}_step{self.curStep:.1f}_best_{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.StepBestCheckpointPath)
             if(acc>self.GlobalBestAccuracy):
                 self.GlobalBestAccuracy = acc
                 if self.GlobalBestCheckpointPath is not None:
                     os.remove(self.GlobalBestCheckpointPath)
-                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/global_best_model_epoch{epoch}_{acc:.2f}.pth"
+                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/{arg_settings.runCodeName}_global_best_{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.GlobalBestCheckpointPath)
             return acc
 
@@ -219,11 +219,11 @@ class TrainProcedure:
         #region training
         if STEP_LINEAR_ONLY & arg_settings.TrainProcessesInChain:
             # train the model
-            step = 1
+            self.curStep = 1
             self.train_epochs(model, arg_settings.EpochsEach)
             self.SaveInputCache(model)
         if STEP_DIFFERENTIABLE_MADDNESS_LAYERS & arg_settings.TrainProcessesInChain:
-            step = 2
+            self.curStep = 2
             # replace each layer with differentiable MADDNESS layer, and retrain model iteratively
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_MATMUL_WITH_GRAD)
@@ -236,22 +236,29 @@ class TrainProcedure:
                 # self.DM_next_layer(model)
                 self.train_epochs(model, arg_settings.EpochsEach)
                 self.LastDMizedLayer = l
+                self.curStep += 0.01
         if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
-            step = 3
+            self.curStep = 3
             # fine tune the model
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_DM_BACKPROP)
-            self.train_epochs(model, arg_settings.EpochsEach)
+            self.train_epochs(model, 90)
         if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
-            step = 4
+            self.curStep = 4
             # evaluate maddness-only model
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
-            self.evaluate_model(model，1)
+            self.evaluate_model(model, 1)
         #endregion
+        # if exist, remove the latest checkpoint file and save the latest model
+        if path.exists(self.checkpointLatestPath):
+            os.remove(self.checkpointLatestPath)
+        torch.save(arg_settings.ModelInstance.state_dict(), self.checkpointLatestPath)
+
 
     def cleanup(self):
         self.writer.close()
+        torch.save(arg_settings.ModelInstance.state_dict(), self.checkpointLatestPath)
         # self.tensorboard_process.terminate()
 
 

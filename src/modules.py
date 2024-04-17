@@ -232,12 +232,61 @@ class NimbusLinear(Linear, NimbusLayer):
             # TODO 暂时使用matmul计算，先跑通锁层训练
             out = nn.functional.linear(inputMatrix, self.weight,self.bias).to(inputMatrix.device)
             # maddness.
-            # return self.forward_maddness_only(input)
+            return self.forward_maddness_only(inputMatrix)
         else:
             raise ValueError("Invalid state")
 
         return out
     
+    def forward_maddness_only(self, X):
+        """
+        使用纯maddness的方式计算输出，这种方式应当充分运用GPU并行加速，也应该是所有方法中计算最快的。（严谨的说应该慢于high opt模式，因为还有8位量化）
+        X为输入矩阵，形状为（N，D），其中N是样本数，D是特征数。D=C*d，C是codeblockCount，d是单个codeblock的维数。
+        每一行可以切分为C个codeblock，每个codeblock都可以视作一个决策树的输入向量，d维。
+        self.dims形状为(C*depth),换句话说(1, C * 4)，
+        self.lut形状为(C, K, M)，其中M是输出的维数，C是codeblockCount，K是bucketsPerBlock。
+        """
+        N, D = X.shape
+        C = self.codeblockCount.item()
+        d = D // C
+        depth = self.treeDepth.item()
+        K = self.bucketsPerBlock.item()
+        
+        # torch当中的weight是（M，D）的矩阵，其中M是输出的维数，D是输入的维数
+        M = self.weight.shape[0]
+        out = torch.zeros([N, M], dtype=torch.float32, device=X.device)
+
+        # 计算所有决策树的结果
+        # reshaping X to match (N, C, d)
+        X_reshaped = X.view(N, C, d)
+        # 获取每层的维度索引
+        dim_indices = self.dims.view(1, C, depth).expand(N, C, depth)
+        # 获取对应的阈值
+        threshold_values = self.thresholds.view(1, C, K-1).expand(N, C, K-1)
+        encoded = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
+        lut_view = self.lut.view(C, K, M)
+
+        for curDepth in range(depth):
+            # 获取当前层的维度索引
+            cur_dim_indices = dim_indices[:,:, curDepth]
+            # 获取当前层的X数据
+            cur_X = torch.gather(X_reshaped, 2, cur_dim_indices.unsqueeze(2).expand(N, C, 1))
+            # 获取当前层的阈值
+            cur_threshold_values = torch.gather(threshold_values, 2, encoded.expand(N, C, K-1))
+            # 比较生成二进制决策结果
+            decisions = cur_X < cur_threshold_values
+            # 若小于，则将encoded对应的元素乘2，否则乘2再加1
+            encoded = torch.where(decisions, encoded + encoded, encoded + encoded + torch.ones_like(encoded))
+            
+        # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
+            # 生成用于gather的索引
+        gather_indices = encoded.expand(-1, -1, M)
+        # 从LUT中批量提取数据
+        out = torch.gather(lut_view, 1, gather_indices).sum(dim=1)
+
+        return out
+
+
     def state_dict_hook(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         if 'state' in state_dict:
             state_dict['state'] = state_dict['state'].item()
@@ -257,6 +306,7 @@ class NimbusLinear(Linear, NimbusLayer):
     # 这里类似一个状态机，根据状态的不同，进行不同的操作
     # 基本来说有4种状态
     def set_state(self, newState: int) -> None:
+        print(f"{self.name} set state to {newState} from {self.curComputeState}")
         if newState == defines.NIMBUS_STATE_DM_BACKPROP:
             self.lut.requires_grad = True
             self.thresholds.requires_grad = True
