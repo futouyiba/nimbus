@@ -169,7 +169,7 @@ class NimbusLinear(Linear, NimbusLayer):
         self.lut = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
 
         if codeblockCount == -1:
-            codeblockCount = in_features//2
+            codeblockCount = in_features//arg_settings.BlockWidth
 
         self.selectionMatrix:torch.Tensor = Parameter(create_selection_matrix(C=codeblockCount, K=16), requires_grad= True)
         # how many codeblocks a row of input is divided into, noted as "C" in the maddness paper
@@ -178,6 +178,7 @@ class NimbusLinear(Linear, NimbusLayer):
         # it's a 2D matrix, a diagonalized sparse matrix
         self.treeDesMat = Parameter(create_4layer_tree_des_matrix(self.codeblockCount.item()), requires_grad=False)
         self.dims = Parameter(torch.zeros((self.selectionMatrix.shape[0],1), dtype=torch.int32), requires_grad=False)
+        self.dimsWithin = Parameter(torch.zeros((1, codeblockCount, treeDepth), dtype=torch.int32), requires_grad=False)
         self.thresholds = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
         self.offset = Parameter(torch.Tensor([0.0]), requires_grad=False)
         self.scale = Parameter(torch.Tensor([1.0]), requires_grad=False)
@@ -260,7 +261,10 @@ class NimbusLinear(Linear, NimbusLayer):
         # reshaping X to match (N, C, d)
         X_reshaped = X.view(N, C, d)
         # 获取每层的维度索引
-        dim_indices = self.dims.view(1, C, depth).expand(N, C, depth)
+        dims_view = self.dimsWithin.view(1, C, depth)
+        # 从每个值里减去c(属于第几个codeblock)
+        
+        dim_indices = dims_view.expand(N, C, depth)
         # 获取对应的阈值
         threshold_values = self.thresholds.view(1, C, K-1).expand(N, C, K-1)
         encoded = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
@@ -270,19 +274,21 @@ class NimbusLinear(Linear, NimbusLayer):
             # 获取当前层的维度索引
             cur_dim_indices = dim_indices[:,:, curDepth]
             # 获取当前层的X数据
-            cur_X = torch.gather(X_reshaped, 2, cur_dim_indices.unsqueeze(2).expand(N, C, 1))
+            cur_dim_expanded = cur_dim_indices.unsqueeze(2).expand(N, C, 1)
+            
+            cur_X = torch.gather(X_reshaped, 2, cur_dim_expanded)
             # 获取当前层的阈值
-            cur_threshold_values = torch.gather(threshold_values, 2, encoded)
+            cur_threshold_values = torch.gather(threshold_values, 2, encoded-1)
             # cur_threshold_values = torch.gather(threshold_values, 2, encoded.unsqueeze(2))
             # 比较生成二进制决策结果
             decisions = cur_X < cur_threshold_values
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
-            encoded = torch.where(decisions, encoded + encoded, encoded + encoded + torch.ones_like(encoded, dtype=torch.int64))
+            encoded = encoded * 2 -1 + decisions.long()
             
-        encoded = encoded - torch.ones_like(encoded, dtype=torch.int64)
+        encoded = encoded - 1
         # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
             # 生成用于gather的索引
-        gather_indices = encoded.expand(N, C, 1, M)
+        gather_indices = encoded.unsqueeze(3).expand(N, C, 1, M)
         lut_expanded = lut_view.unsqueeze(0).expand(N, C, K, M)
         # 从LUT中批量提取数据
         gathered = torch.gather(lut_expanded, 2, gather_indices) # (N,C, 1, M)
@@ -375,6 +381,11 @@ class NimbusLinear(Linear, NimbusLayer):
         """
         all_splits_np, all_prototypes, _, thresholds, dims = maddness.learn_proto_and_hash_function(X, self.codeblockCount.item(), self.bucketsPerBlock.item())
         self.dims.data = torch.from_numpy(dims).to(arg_settings.Device)
+        dimsWithin = self.dims.data.clone()
+        subtractor = torch.arange(self.codeblockCount.item())*(arg_settings.BlockWidth)
+        subtractor = subtractor.repeat_interleave(self.treeDepth.item()).to(arg_settings.Device)
+        dimsWithin = dimsWithin - subtractor
+        self.dimsWithin.data = dimsWithin.to(arg_settings.Device)
         self.thresholds.data = torch.from_numpy(thresholds).unsqueeze(1).to(arg_settings.Device)
         # lut_numpy = maddness.maddness_lut(self.weight.cpu(), all_prototypes= all_prototypes)
         B = self.weight.cpu().numpy()

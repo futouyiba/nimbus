@@ -6,6 +6,9 @@ import models
 from os import path
 import defines
 from defines import STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS, STEP_DIFFERENTIABLE_MADDNESS_LAYERS, STEP_LINEAR_ONLY, STEP_EVALUATE_MADDNESS_ONLY
+
+
+BlockWidth = 2
 HiddenSize1 = 32
 HiddenSize2 = 32
 LearningRate = 0.01
