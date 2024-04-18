@@ -160,18 +160,24 @@ class TrainProcedure:
             self.writer.add_scalar('crucial/test_acc', acc, epoch)
             self.writer.add_scalar('epoch/test_loss', epoch_test_loss, epoch)
 
-            if(acc>self.StepBestAccuracy):
+            checkpointFolder = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}"
+            if not os.path.exists(checkpointFolder):
+                os.makedirs(checkpointFolder)
+
+            if acc > self.StepBestAccuracy:
                 self.StepBestAccuracy = acc
                 if self.StepBestCheckpointPath is not None:
                     os.remove(self.StepBestCheckpointPath)
-                self.StepBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/{arg_settings.runCodeName}_step{self.curStep:.1f}_best_{epoch}_{acc:.2f}.pth"
+                self.StepBestCheckpointPath = f"{checkpointFolder}/{arg_settings.runCodeName}_step{self.curStep:.1f}_best_{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.StepBestCheckpointPath)
-            if(acc>self.GlobalBestAccuracy):
+
+            if acc > self.GlobalBestAccuracy:
                 self.GlobalBestAccuracy = acc
                 if self.GlobalBestCheckpointPath is not None:
                     os.remove(self.GlobalBestCheckpointPath)
-                self.GlobalBestCheckpointPath = f"{MODEL_CHECKPOINT_PATH_ROOT}/{arg_settings.ModelInstance.__class__.__name__}/{arg_settings.runCodeName}_global_best_{epoch}_{acc:.2f}.pth"
+                self.GlobalBestCheckpointPath = f"{checkpointFolder}/{arg_settings.runCodeName}_global_best_{epoch}_{acc:.2f}.pth"
                 torch.save(model.state_dict(), self.GlobalBestCheckpointPath)
+
             return acc
 
     # 把模型中某一层替换为可微的MADDNESS层，锁定其他层不进行更新。这个过程supposedly被逐个使用，比如一个3层网络，在第一层DM化（differentiable MADDNESS化）之后，
