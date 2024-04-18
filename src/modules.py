@@ -207,23 +207,8 @@ class NimbusLinear(Linear, NimbusLayer):
             # use selection matrix and thresholds to get the chosen elements
             # then do the tree-like operations using the treeDesMat
             # then do the approximate matmul with LUT
-            chosen_elements:torch.Tensor = inputMatrix[:, self.dims]
-            transposedChosen = chosen_elements.T
-            subtracted = self.selectionMatrix.mm(transposedChosen) - self.thresholds
-            tanh_h = torch.tanh(subtracted)
-            sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h
-            tree_result = self.treeDesMat.mm(sign_ste)
-            tree_result = tree_result.T.reshape(-1, self.codeblockCount, self.bucketsPerBlock)
-            encoding_soft = nn.Softmax(dim=2)(tree_result)
-            index = torch.argmax(encoding_soft, dim=2, keepdim=True)
-            encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
-                             .scatter_(2, index, 1.0))
-            Encoded = encoding_hard - encoding_soft.detach() + encoding_soft
-            out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
-            M = self.lut.size(0)
-            out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
-            # put out tensor to the same device as inputMatrix
-            out = out.to(inputMatrix.device)
+            out = self.dm_forward(inputMatrix).to(inputMatrix.device)
+
         elif self.curComputeState == defines.NIMBUS_STATE_MADDNESS_ONLY:
             # TODO 优化、缓存、加速
             # 1. 缓存cpu上的numpy数组，用于MADDNESS的计算
@@ -234,9 +219,47 @@ class NimbusLinear(Linear, NimbusLayer):
             out = nn.functional.linear(inputMatrix, self.weight,self.bias).to(inputMatrix.device)
             # maddness.
             return self.forward_maddness_only(inputMatrix)
-        else:
-            raise ValueError("Invalid state")
+        elif self.curComputeState == defines.NIMBUS_STATE_RSLT_CHK:
+            # 用上面的3种方法计算输出，然后比较输出的差距,输出差距统计,并且把maddness only的输出传给下一层
+            out_matmul = nn.functional.linear(inputMatrix, self.weight, self.bias).to(inputMatrix.device)
+            out_dm = self.dm_forward(inputMatrix)
+            out_maddness = self.forward_maddness_only(inputMatrix)
 
+            print(f"out_matmul of {self.name}", out_matmul)
+            print(f"out_dm of {self.name}", out_dm)
+            print(f"out_maddness of {self.name}", out_maddness)
+            # 计算输出差距,用类似于MSE的方法,和类似熵的方法
+                    # 计算均方误差MSE
+            mse_dm = torch.mean((out_matmul - out_dm) ** 2)
+            mse_maddness = torch.mean((out_matmul - out_maddness) ** 2)
+
+            # 归一化差距
+            normalized_mse_dm = mse_dm / torch.numel(out_matmul)
+            normalized_mse_maddness = mse_maddness / torch.numel(out_matmul)
+
+            # 输出归一化的MSE差距
+            print(f"Normalized MSE between matmul and dm for {self.name}:", normalized_mse_dm)
+            print(f"Normalized MSE between matmul and maddness for {self.name}:", normalized_mse_maddness)
+
+            out = out_maddness       
+        return out
+
+    def dm_forward(self, inputMatrix):
+        chosen_elements:torch.Tensor = inputMatrix[:, self.dims]
+        transposedChosen = chosen_elements.T
+        subtracted = self.selectionMatrix.mm(transposedChosen) - self.thresholds
+        tanh_h = torch.tanh(subtracted)
+        sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h
+        tree_result = self.treeDesMat.mm(sign_ste)
+        tree_result = tree_result.T.reshape(-1, self.codeblockCount, self.bucketsPerBlock)
+        encoding_soft = nn.Softmax(dim=2)(tree_result)
+        index = torch.argmax(encoding_soft, dim=2, keepdim=True)
+        encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
+                             .scatter_(2, index, 1.0))
+        Encoded = encoding_hard - encoding_soft.detach() + encoding_soft
+        out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
+        M = self.lut.size(0)
+        out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
         return out
     
     def forward_maddness_only(self, X):
@@ -344,6 +367,12 @@ class NimbusLinear(Linear, NimbusLayer):
                 self.bias.requires_grad = False
         elif newState == defines.NIMBUS_STATE_DM_OPT:
             pass
+        elif newState == defines.NIMBUS_STATE_RSLT_CHK:
+            self.lut.requires_grad = False
+            self.thresholds.requires_grad = False
+            self.weight.requires_grad = False
+            if self.bias is not None:
+                self.bias.requires_grad = False
         
         if self.curComputeState == defines.NIMBUS_STATE_MATMUL_WITH_GRAD and newState == defines.NIMBUS_STATE_DM_BACKPROP:
             self.learn_maddness_params(self.recorded_input.cpu().numpy())

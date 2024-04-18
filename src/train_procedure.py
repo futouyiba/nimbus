@@ -67,7 +67,9 @@ class TrainProcedure:
         self.runPath = f'{RUNS_PATH_ROOT}/{self.procedure_name}'
         self.writer = SummaryWriter(self.runPath)
         self.checkpointFolder = path.join(MODEL_CHECKPOINT_PATH_ROOT, self.modelDataCombined)
-        self.checkpointLatestPath = path.join(self.checkpointFolder, f'{arg_settings}-latest.pth')
+        if not path.exists(self.checkpointFolder):
+            os.makedirs(self.checkpointFolder)
+        self.checkpointLatestPath = path.join(self.checkpointFolder, f'{arg_settings.runCodeName}-latest.pth')
 
         # 启动TensorBoard
         # self.tensorboard_process = subprocess.Popen(['python', '-m', 'tensorboard.main', '--logdir', self.runPath])
@@ -240,14 +242,16 @@ class TrainProcedure:
         if STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS & arg_settings.TrainProcessesInChain:
             self.curStep = 3
             # fine tune the model
+            arg_settings.Optimizer = torch.optim.Adam(model.parameters(), lr=arg_settings.InitialLearningRate, weight_decay=arg_settings.WeightDecay, betas=(arg_settings.Momentum, 0.999))
+            arg_settings.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(arg_settings.Optimizer, T_max=arg_settings.EpochsEach, eta_min=0.0001)
             for l in nimbusLayers:
                 l.set_state(NIMBUS_STATE_DM_BACKPROP)
             self.train_epochs(model, 90)
-        if STEP_EVALUATE_MADDNESS_ONLY & arg_settings.TrainProcessesInChain:
+        if STEP_EVALUATE_MADDNESS & arg_settings.TrainProcessesInChain:
             self.curStep = 4
             # evaluate maddness-only model
             for l in nimbusLayers:
-                l.set_state(NIMBUS_STATE_MADDNESS_ONLY)
+                l.set_state(NIMBUS_STATE_RSLT_CHK)
             self.evaluate_model(model, 1)
         #endregion
         # if exist, remove the latest checkpoint file and save the latest model

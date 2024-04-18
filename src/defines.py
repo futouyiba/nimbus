@@ -52,6 +52,8 @@ NIMBUS_STATE_DM_OPT = -5
 NIMBUS_STATE_RECORD_INPUT = -1
 #endregion
 
+NIMBUS_STATE_RSLT_CHK = 20
+
 #region Consts:Usage
 
 # several bitmask-like constants to specify what steps would be run. used for the training process type
@@ -62,6 +64,6 @@ STEP_DIFFERENTIABLE_MADDNESS_LAYERS = 2
 # 4-fine tuning the model
 STEP_FINE_TUNE_DIFFERENTIABLE_MADDNESS = 4
 # evaluate maddness-only model
-STEP_EVALUATE_MADDNESS_ONLY = 8
+STEP_EVALUATE_MADDNESS = 8
 
 #endregion
