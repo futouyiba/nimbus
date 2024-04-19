@@ -126,11 +126,11 @@ class NimbusLinear(Linear, NimbusLayer):
             print(f"out_maddness of {self.name}", out_maddness)
             # 计算误差百分比，对于每个元素，计算相对误差，百分比只显示小数点前的
             # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_dm的差的绝对值
-            error_rate = torch.abs(out_matmul - out_dm) / torch.abs(out_matmul)
-            print(f"Error rate between matmul and dm for {self.name}:", error_rate)
+            error_rate = (torch.abs(out_matmul - out_dm) / torch.abs(out_matmul) * 100)
+            print(f"Error percent between matmul and dm for {self.name}:{error_rate.mean().item()}%")
             # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_maddness的差的绝对值
-            error_rate = torch.abs(out_matmul - out_maddness) / torch.abs(out_matmul)
-            print(f"Error rate between matmul and maddness for {self.name}:", error_rate)
+            error_rate =( torch.abs(out_matmul - out_maddness) / torch.abs(out_matmul) * 100)
+            print(f"Error percent between matmul and maddness for {self.name}: {error_rate.mean().item()}%")
 
 
 
@@ -162,12 +162,74 @@ class NimbusLinear(Linear, NimbusLayer):
         index = torch.argmax(encoding_soft, dim=2, keepdim=True) # N, C, 1
         encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
                              .scatter_(2, index, 1.0)) # N, C, K
+        # 打印一个encoding,它应该是(N,C)的矩阵,每个元素是0-15之间的整数，代表这个encoding_hard的对应第几个元素为1(其余都是0)
+        print(f"DMized mode encoding matrix:", index)
         Encoded = encoding_hard - encoding_soft.detach() + encoding_soft # N, C, K
         # out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
         # M = self.lut.size(0)
         # out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
         out = torch.einsum("NCK, CKM -> NM", Encoded, self.lut)
         return out
+    
+    # def forward_maddness_only(self, X):
+    #     """
+    #     使用纯maddness的方式计算输出，这种方式应当充分运用GPU并行加速，也应该是所有方法中计算最快的。（严谨的说应该慢于high opt模式，因为还有8位量化）
+    #     X为输入矩阵，形状为（N，D），其中N是样本数，D是特征数。D=C*d，C是codeblockCount，d是单个codeblock的维数。
+    #     每一行可以切分为C个codeblock，每个codeblock都可以视作一个决策树的输入向量，d维。
+    #     self.dims形状为(C*depth),换句话说(1, C * 4)，
+    #     self.lut形状为(C, K, M)，其中M是输出的维数，C是codeblockCount，K是bucketsPerBlock。
+    #     """
+    #     N, D = X.shape
+    #     C = self.codeblockCount.item()
+    #     d = D // C
+    #     h = self.treeHeight.item()
+    #     K = self.bucketsPerBlock.item()
+        
+    #     # torch当中的weight是（M，D）的矩阵，其中M是输出的维数，D是输入的维数
+    #     M = self.weight.shape[0]
+    #     out = torch.zeros([N, M], dtype=torch.float32, device=X.device)
+
+    #     # 计算所有决策树的结果
+    #     # reshaping X to match (N, C, d)
+    #     X_reshaped = X.view(N, C, d)
+    #     # 获取每层的维度索引
+    #     dims_view = self.dimsWithin.view(1, C, h)
+    #     # 从每个值里减去c(属于第几个codeblock)
+        
+    #     dim_indices = dims_view.expand(N, C, h)
+    #     # 获取对应的阈值
+    #     threshold_values = self.thresholds.view(1, C, K-1).expand(N, C, K-1)
+    #     encoded = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
+    #     lut_view = self.lut.view(C, K, M)
+
+    #     for curDepth in range(h):
+    #         # 获取当前层的维度索引
+    #         cur_dim_indices = dim_indices[:,:, curDepth]
+    #         # 获取当前层的X数据
+    #         cur_dim_expanded = cur_dim_indices.unsqueeze(2).expand(N, C, 1)
+            
+    #         cur_X = torch.gather(X_reshaped, 2, cur_dim_expanded)
+    #         # 获取当前层的阈值
+    #         cur_threshold_values = torch.gather(threshold_values, 2, encoded-1)
+    #         # cur_threshold_values = torch.gather(threshold_values, 2, encoded.unsqueeze(2))
+    #         # 比较生成二进制决策结果
+    #         decisions = cur_X >= cur_threshold_values
+    #         # 若小于，则将encoded对应的元素乘2，否则乘2再加1
+    #         encoded = encoded * 2 -1 + decisions.long()
+            
+    #     encoded = encoded - 1
+    #     # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
+    #         # 生成用于gather的索引
+    #     gather_indices = encoded.unsqueeze(3).expand(N, C, 1, M)
+    #     lut_expanded = lut_view.unsqueeze(0).expand(N, C, K, M)
+    #     # 从LUT中批量提取数据
+    #     gathered = torch.gather(lut_expanded, 2, gather_indices) # (N,C, 1, M)
+    #     summed = gathered.sum(dim=1) # (N, 1, M)
+    #     out = summed.squeeze(1)
+
+    #     return out
+
+
     
     def forward_maddness_only(self, X):
         """
@@ -185,41 +247,28 @@ class NimbusLinear(Linear, NimbusLayer):
         
         # torch当中的weight是（M，D）的矩阵，其中M是输出的维数，D是输入的维数
         M = self.weight.shape[0]
-        out = torch.zeros([N, M], dtype=torch.float32, device=X.device)
+        selectedX = X[:, self.dims]
+        selectedX_reshaped = selectedX.view(N, C, h)
 
-        # 计算所有决策树的结果
-        # reshaping X to match (N, C, d)
-        X_reshaped = X.view(N, C, d)
-        # 获取每层的维度索引
-        dims_view = self.dimsWithin.view(1, C, h)
-        # 从每个值里减去c(属于第几个codeblock)
-        
-        dim_indices = dims_view.expand(N, C, h)
         # 获取对应的阈值
         threshold_values = self.thresholds.view(1, C, K-1).expand(N, C, K-1)
-        encoded = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
-        lut_view = self.lut.view(C, K, M)
+        # treeNodeIndices = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
+        encoded = torch.zeros([N, C, 1], dtype=torch.int64, device=X.device)
+        # lut_view = self.lut.view(C, K, M) # it should be already in this shape
 
-        for curDepth in range(h):
-            # 获取当前层的维度索引
-            cur_dim_indices = dim_indices[:,:, curDepth]
-            # 获取当前层的X数据
-            cur_dim_expanded = cur_dim_indices.unsqueeze(2).expand(N, C, 1)
-            
-            cur_X = torch.gather(X_reshaped, 2, cur_dim_expanded)
+        for curHeight in range(h):
             # 获取当前层的阈值
-            cur_threshold_values = torch.gather(threshold_values, 2, encoded-1)
-            # cur_threshold_values = torch.gather(threshold_values, 2, encoded.unsqueeze(2))
+            cur_threshold_values = torch.gather(threshold_values, 2, encoded + 2**curHeight -1) # N, C, 1
             # 比较生成二进制决策结果
-            decisions = cur_X < cur_threshold_values
+            decisions = selectedX_reshaped[:,:,curHeight].view(N,C,1) >= cur_threshold_values
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
-            encoded = encoded * 2 -1 + decisions.long()
+            encoded = encoded * 2 + decisions
             
-        encoded = encoded - 1
+        print(f"maddness only encoded matrix:", encoded)
         # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
             # 生成用于gather的索引
         gather_indices = encoded.unsqueeze(3).expand(N, C, 1, M)
-        lut_expanded = lut_view.unsqueeze(0).expand(N, C, K, M)
+        lut_expanded = self.lut.unsqueeze(0).expand(N, C, K, M)
         # 从LUT中批量提取数据
         gathered = torch.gather(lut_expanded, 2, gather_indices) # (N,C, 1, M)
         summed = gathered.sum(dim=1) # (N, 1, M)
@@ -332,44 +381,6 @@ class NimbusLinear(Linear, NimbusLayer):
             # lut_numpy[i] = maddness.maddness_lut(q, all_prototypes)
         # self.lut.data = torch.from_numpy(lut_numpy).float().to(arg_settings.Device)
         self.all_splits.data = torch.from_numpy(all_splits_np).to(arg_settings.Device)
-
-    # def learn_maddness_params(self, X) -> None:
-    #     """
-    #     X是机器学习模型的输入数据，维度是（N，D），N条数据记录，每个记录有D个元素。我们将它切分成C个codeblocks（比如说C=D//2），每个codeblockPile的维度是（N，d），其中d=D//C（比如说2）。然后把每个codeblockPile作depth=4层二叉决策树分桶（/堆），决策树是完全的，会分成K=16桶。分类的依据是每个桶中的MSE最小。
-    #     然后把分出的桶计算出堆中均值，作为prototype。聚合到一起是all_prototypes,它可能维度是（C，K, d）。
-    #     最后，用all_prototypes和模型这一层的weight求出LUT。weight的维度（M，D），M为output的元素数量。LUT相当于预乘值，维度为（C，K，M）。
-
-    #     很好！现在我们让它有更多的能力，进一步符合我的需求。我尝试分几个层次来说清楚：
-    #     首先我们聚焦在其中的一个求出来的决策树，它应该针对其中的一个codeblockPile。希望从这个决策树tree中，得到一个selection matrix，维度为（d，K-1），
-    #     存一个dims张量，维度为（1，depth，K-1），主要包含的是决策树当中每次分裂所使用的dim。dim代表使用第几个元素进行判断，若d=2，则dim可能为0、1，0代表选择这个codeblock（维度（1，d））的第0个元素和threshold去比较，1代表第1个元素做比较。存储时用BFS的遍历顺序。
-    #     存一个threshold，维度与dims相同，代表每次分裂所使用的阈值。
-    #     """
-    #     D = X.shape[1]
-    #     C = self.codeblockCount.item()
-    #     d = D // C
-    #     K = self.bucketsPerBlock.item()
-    #     M = self.weight.shape[0]
-    #     # 将数据分成C个codeblockPile，每个codeblockPile的维度为(N, d)
-    #     codeblockPiles = torch.split(X, d, dim=1)
-
-    def decision_tree_bucketing(codeblock, depth, K):
-        # 每个codeblock训练一个决策树
-        tree = DecisionTreeRegressor(max_depth=depth)
-        indices = np.arange(len(codeblock))
-        
-        # 训练决策树
-        tree.fit(codeblock, indices)
-        
-        # 对每个数据点进行桶分类
-        buckets = tree.apply(codeblock)
-        
-        # 对每个桶计算均值，形成prototype
-        prototypes = torch.zeros((K, codeblock.shape[1]))
-        for i in range(K):
-            prototypes[i] = codeblock[buckets == i].mean(0)
-        
-        return prototypes
-
 
     def load_recorded_input(self):
         self.recorded_input = np.load(self.get_record_input_path())

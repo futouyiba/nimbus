@@ -269,7 +269,7 @@ def _fit_ridge_enc(A_enc=None, Y=None, K=16, lamda=1, X_binary=None):
     W [D, C * K] -> W.T [C * K, D] later reshaped to
     [C, K, D] -> prototype dimensons
     """
-    print(f"_fit_ridge_enc called, with A_enc.shape: {A_enc.shape}, Y.shape: {Y.shape}, K: {K}, lamda: {lamda}")
+    # print(f"_fit_ridge_enc called, with A_enc.shape: {A_enc.shape}, Y.shape: {Y.shape}, K: {K}, lamda: {lamda}")
     # print(f"_fit_ridge_enc called: {A_enc.shape} {Y.shape} {K} {lamda}")
 
     if X_binary is None:
@@ -287,7 +287,7 @@ def _fit_ridge_enc(A_enc=None, Y=None, K=16, lamda=1, X_binary=None):
 
 @numba.njit(fastmath=True, cache=True)
 def _XtA_encoded(A_enc, K=16):
-    print(f"_XtA_encoded: A_enc.shape: {A_enc.shape} K: {K}")
+    # print(f"_XtA_encoded: A_enc.shape: {A_enc.shape} K: {K}")
 
     N, C = A_enc.shape
     D = C * K  # note that this is total number of centroids, not orig D
@@ -404,7 +404,7 @@ def optimal_split_val(
     dim,
     X_orig=None,
 ):
-    print(f"optimal_split_val called with X.shape: {X.shape} dim: {dim} X_orig is None? {X_orig is None}")
+    # print(f"optimal_split_val called with X.shape: {X.shape} dim: {dim} X_orig is None? {X_orig is None}")
     X_orig = X if X_orig is None else X_orig
     if X_orig.shape != X.shape:
         assert X_orig.shape == X.shape
@@ -445,7 +445,7 @@ class Bucket:
         bucket_id=0,
         support_add_and_remove=False,
     ):
-        print(f"__init__ of Bucket called: bucket_id {bucket_id}")
+        # print(f"__init__ of Bucket called: bucket_id {bucket_id}")
         # print(f"__init__ of Bucket called: {D} {N} {sumX} {sumX2} {point_ids} {bucket_id} {support_add_and_remove}")
 
         # self.reset(D=D, sumX=sumX, sumX2=sumX2)
@@ -508,7 +508,7 @@ class Bucket:
             self.point_ids.remove(point_id)
 
     def deepcopy(self, bucket_id=None):  # deep copy
-        print(f"deepcopy of Bucket called: {bucket_id}")
+        # print(f"deepcopy of Bucket called: {bucket_id}")
         bucket_id = self.id if bucket_id is None else bucket_id
         return Bucket(
             sumX=np.copy(self.sumX),
@@ -518,7 +518,7 @@ class Bucket:
         )
 
     def split(self, X=None, dim=None, val=None, X_orig=None):
-        print(f"split of Bucket {self.id} called: x.shape: {X.shape} dim: {dim} val: {val}, X_orig is None? {X_orig is None}")
+        # print(f"split of Bucket {self.id} called: x.shape: {X.shape} dim: {dim} val: {val}, X_orig is None? {X_orig is None}")
         # traceback.print_stack()
 
         id0 = 2 * self.id
@@ -547,7 +547,7 @@ class Bucket:
         return create_bucket(X0, ids0, id0), create_bucket(X1, ids1, id1)
 
     def optimal_split_val(self, X, dim, X_orig=None):
-        print(f"optimal_split_val of Bucket {self.id} called: x.shape:{X.shape} {dim} x_orig is none? {X_orig is None}")
+        # print(f"optimal_split_val of Bucket {self.id} called: x.shape:{X.shape} {dim} x_orig is none? {X_orig is None}")
         if self.N < 2 or self.point_ids is None:
             return 0, 0
         my_idxs = np.asarray(self.point_ids)
@@ -585,9 +585,9 @@ def learn_binary_tree_splits(
     check_x_dims: int = 8,  # can be used to check more or less dims with max losses
     learn_quantize_params: bool = False,
 ) -> Tuple[list, int, Union[list, np.ndarray]]:
-    print(f"learn_binary_tree_splits: X.shape:{X.shape}, K:{K}, return_prototypes:{return_prototypes}, "
-          f"X_orig is None? {X_orig is None}, check_x_dims:{check_x_dims}, "
-          f"learn_quantize_params:{learn_quantize_params}")
+    # print(f"learn_binary_tree_splits: X.shape:{X.shape}, K:{K}, return_prototypes:{return_prototypes}, "
+    #       f"X_orig is None? {X_orig is None}, check_x_dims:{check_x_dims}, "
+    #       f"learn_quantize_params:{learn_quantize_params}")
     assert K in (4, 8, 16, 32, 64, 128)
     nsplits = int(np.log2(K))
 
@@ -685,7 +685,7 @@ def learn_binary_tree_splits(
 def init_and_learn_hash_function(
     X: np.ndarray, C: int, K: int, pq_perm_algo: str = "start"
 ) -> Tuple[np.ndarray, list[list[MultiSplit]], np.ndarray, list]:
-    print(f"init_and_learn_hash_function: {X.shape} {C} {K} {pq_perm_algo}")
+    # print(f"init_and_learn_hash_function: {X.shape} {C} {K} {pq_perm_algo}")
     traceback.print_stack()
 
     _, D = X.shape
@@ -748,7 +748,7 @@ def init_and_learn_hash_function(
 def learn_proto_and_hash_function(
     X: np.ndarray, C: int, K: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    print(f"learn_proto_and_hash_function: {X.shape} {C} {K}")
+    # print(f"learn_proto_and_hash_function: {X.shape} {C} {K}")
 
     _, D = X.shape
 
