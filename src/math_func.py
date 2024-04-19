@@ -1,5 +1,6 @@
 import math
 import torch
+import numpy as np
 
 # create a diagonalized sparse matrix, which can be used to do selection of data
 def create_selection_matrix(

@@ -2,6 +2,7 @@ import math
 import os
 import time
 from typing import Literal
+from sklearn.tree import DecisionTreeRegressor
 import torch
 import torch.nn as nn
 from torch.nn import Parameter,Linear
@@ -57,7 +58,7 @@ class NimbusLinear(Linear, NimbusLayer):
         # 下面的参数名应该可以解释他们自己是什么
         self.curComputeState = state
         self.name:str = f'nimbus_linear_{NimbusLayer.count-1}'
-        self.treeDepth = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
+        self.treeHeight = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
         bucketsPerBlock = 2 ** treeDepth
         self.bucketsPerBlock = Parameter(torch.tensor(bucketsPerBlock, dtype=torch.int32), requires_grad=False)
         # the LUT for MADDNESS
@@ -123,38 +124,49 @@ class NimbusLinear(Linear, NimbusLayer):
             print(f"out_matmul of {self.name}", out_matmul)
             print(f"out_dm of {self.name}", out_dm)
             print(f"out_maddness of {self.name}", out_maddness)
-            # 计算输出差距,用类似于MSE的方法,和类似熵的方法
-                    # 计算均方误差MSE
-            mse_dm = torch.mean((out_matmul - out_dm) ** 2)
-            mse_maddness = torch.mean((out_matmul - out_maddness) ** 2)
+            # 计算误差百分比，对于每个元素，计算相对误差，百分比只显示小数点前的
+            # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_dm的差的绝对值
+            error_rate = torch.abs(out_matmul - out_dm) / torch.abs(out_matmul)
+            print(f"Error rate between matmul and dm for {self.name}:", error_rate)
+            # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_maddness的差的绝对值
+            error_rate = torch.abs(out_matmul - out_maddness) / torch.abs(out_matmul)
+            print(f"Error rate between matmul and maddness for {self.name}:", error_rate)
 
-            # 归一化差距
-            normalized_mse_dm = mse_dm / torch.numel(out_matmul)
-            normalized_mse_maddness = mse_maddness / torch.numel(out_matmul)
 
-            # 输出归一化的MSE差距
-            print(f"Normalized MSE between matmul and dm for {self.name}:", normalized_mse_dm)
-            print(f"Normalized MSE between matmul and maddness for {self.name}:", normalized_mse_maddness)
+
+            # # 计算输出差距,用类似于MSE的方法,和类似熵的方法
+            #         # 计算均方误差MSE
+            # mse_dm = torch.mean((out_matmul - out_dm) ** 2)
+            # mse_maddness = torch.mean((out_matmul - out_maddness) ** 2)
+
+            # # 归一化差距
+            # normalized_mse_dm = mse_dm / torch.numel(out_matmul)
+            # normalized_mse_maddness = mse_maddness / torch.numel(out_matmul)
+
+            # # 输出归一化的MSE差距
+            # print(f"Normalized MSE between matmul and dm for {self.name}:", normalized_mse_dm)
+            # print(f"Normalized MSE between matmul and maddness for {self.name}:", normalized_mse_maddness)
 
             out = out_maddness       
         return out
 
     def dm_forward(self, inputMatrix):
-        chosen_elements:torch.Tensor = inputMatrix[:, self.dims]
-        transposedChosen = chosen_elements.T
-        subtracted = self.selectionMatrix.mm(transposedChosen) - self.thresholds
-        tanh_h = torch.tanh(subtracted)
-        sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h
-        tree_result = self.treeDesMat.mm(sign_ste)
-        tree_result = tree_result.T.reshape(-1, self.codeblockCount, self.bucketsPerBlock)
-        encoding_soft = nn.Softmax(dim=2)(tree_result)
-        index = torch.argmax(encoding_soft, dim=2, keepdim=True)
+        chosen_elements:torch.Tensor = inputMatrix[:, self.dims] # N, depth
+        transposedChosen = chosen_elements.T # depth, N
+        subtracted = self.selectionMatrix.mm(transposedChosen) - self.thresholds # C*15, N
+        tanh_h = torch.tanh(subtracted) # C*15, N
+        sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h # C*15, N
+        tree_result = self.treeDesMat.mm(sign_ste) # C*K, N
+        tree_result = tree_result.T.reshape(-1, self.codeblockCount, self.bucketsPerBlock) # N, C, K
+        encoding_soft = nn.Softmax(dim=2)(tree_result) # N, C, K
+        index = torch.argmax(encoding_soft, dim=2, keepdim=True) # N, C, 1
         encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
-                             .scatter_(2, index, 1.0))
-        Encoded = encoding_hard - encoding_soft.detach() + encoding_soft
-        out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
-        M = self.lut.size(0)
-        out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
+                             .scatter_(2, index, 1.0)) # N, C, K
+        Encoded = encoding_hard - encoding_soft.detach() + encoding_soft # N, C, K
+        # out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
+        # M = self.lut.size(0)
+        # out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
+        out = torch.einsum("NCK, CKM -> NM", Encoded, self.lut)
         return out
     
     def forward_maddness_only(self, X):
@@ -168,7 +180,7 @@ class NimbusLinear(Linear, NimbusLayer):
         N, D = X.shape
         C = self.codeblockCount.item()
         d = D // C
-        depth = self.treeDepth.item()
+        h = self.treeHeight.item()
         K = self.bucketsPerBlock.item()
         
         # torch当中的weight是（M，D）的矩阵，其中M是输出的维数，D是输入的维数
@@ -179,16 +191,16 @@ class NimbusLinear(Linear, NimbusLayer):
         # reshaping X to match (N, C, d)
         X_reshaped = X.view(N, C, d)
         # 获取每层的维度索引
-        dims_view = self.dimsWithin.view(1, C, depth)
+        dims_view = self.dimsWithin.view(1, C, h)
         # 从每个值里减去c(属于第几个codeblock)
         
-        dim_indices = dims_view.expand(N, C, depth)
+        dim_indices = dims_view.expand(N, C, h)
         # 获取对应的阈值
         threshold_values = self.thresholds.view(1, C, K-1).expand(N, C, K-1)
         encoded = torch.ones(N, C, 1, dtype=torch.int64, device=X.device)
         lut_view = self.lut.view(C, K, M)
 
-        for curDepth in range(depth):
+        for curDepth in range(h):
             # 获取当前层的维度索引
             cur_dim_indices = dim_indices[:,:, curDepth]
             # 获取当前层的X数据
@@ -307,18 +319,58 @@ class NimbusLinear(Linear, NimbusLayer):
         self.dims.data = torch.from_numpy(dims).to(arg_settings.Device)
         dimsWithin = self.dims.data.clone()
         subtractor = torch.arange(self.codeblockCount.item())*(arg_settings.BlockWidth)
-        subtractor = subtractor.repeat_interleave(self.treeDepth.item()).to(arg_settings.Device)
+        subtractor = subtractor.repeat_interleave(self.treeHeight.item()).to(arg_settings.Device)
         dimsWithin = dimsWithin - subtractor
         self.dimsWithin.data = dimsWithin.to(arg_settings.Device)
         self.thresholds.data = torch.from_numpy(thresholds).unsqueeze(1).to(arg_settings.Device)
-        # lut_numpy = maddness.maddness_lut(self.weight.cpu(), all_prototypes= all_prototypes)
-        B = self.weight.cpu().numpy()
-        lut_numpy = np.zeros((B.shape[0], self.codeblockCount.item(), self.bucketsPerBlock.item()))
-        for i, q in enumerate(B):
-            lut_numpy[i] = maddness.maddness_lut(q, all_prototypes)
-        self.lut.data = torch.from_numpy(lut_numpy).float().to(arg_settings.Device)
+        self.prototypes = torch.tensor(all_prototypes).to(arg_settings.Device)
+        self.lut.data = torch.einsum("CKD, MD -> CKM", self.prototypes, self.weight)
+        # lut_numpy = maddness.maddness_lut(self.weight.detach().cpu(), all_prototypes= all_prototypes)
+        B = self.weight.detach().cpu().numpy()
+        # lut_numpy = np.zeros((B.shape[0], self.codeblockCount.item(), self.bucketsPerBlock.item()))
+        # for i, q in enumerate(B):
+            # lut_numpy[i] = maddness.maddness_lut(q, all_prototypes)
+        # self.lut.data = torch.from_numpy(lut_numpy).float().to(arg_settings.Device)
         self.all_splits.data = torch.from_numpy(all_splits_np).to(arg_settings.Device)
+
+    # def learn_maddness_params(self, X) -> None:
+    #     """
+    #     X是机器学习模型的输入数据，维度是（N，D），N条数据记录，每个记录有D个元素。我们将它切分成C个codeblocks（比如说C=D//2），每个codeblockPile的维度是（N，d），其中d=D//C（比如说2）。然后把每个codeblockPile作depth=4层二叉决策树分桶（/堆），决策树是完全的，会分成K=16桶。分类的依据是每个桶中的MSE最小。
+    #     然后把分出的桶计算出堆中均值，作为prototype。聚合到一起是all_prototypes,它可能维度是（C，K, d）。
+    #     最后，用all_prototypes和模型这一层的weight求出LUT。weight的维度（M，D），M为output的元素数量。LUT相当于预乘值，维度为（C，K，M）。
+
+    #     很好！现在我们让它有更多的能力，进一步符合我的需求。我尝试分几个层次来说清楚：
+    #     首先我们聚焦在其中的一个求出来的决策树，它应该针对其中的一个codeblockPile。希望从这个决策树tree中，得到一个selection matrix，维度为（d，K-1），
+    #     存一个dims张量，维度为（1，depth，K-1），主要包含的是决策树当中每次分裂所使用的dim。dim代表使用第几个元素进行判断，若d=2，则dim可能为0、1，0代表选择这个codeblock（维度（1，d））的第0个元素和threshold去比较，1代表第1个元素做比较。存储时用BFS的遍历顺序。
+    #     存一个threshold，维度与dims相同，代表每次分裂所使用的阈值。
+    #     """
+    #     D = X.shape[1]
+    #     C = self.codeblockCount.item()
+    #     d = D // C
+    #     K = self.bucketsPerBlock.item()
+    #     M = self.weight.shape[0]
+    #     # 将数据分成C个codeblockPile，每个codeblockPile的维度为(N, d)
+    #     codeblockPiles = torch.split(X, d, dim=1)
+
+    def decision_tree_bucketing(codeblock, depth, K):
+        # 每个codeblock训练一个决策树
+        tree = DecisionTreeRegressor(max_depth=depth)
+        indices = np.arange(len(codeblock))
         
+        # 训练决策树
+        tree.fit(codeblock, indices)
+        
+        # 对每个数据点进行桶分类
+        buckets = tree.apply(codeblock)
+        
+        # 对每个桶计算均值，形成prototype
+        prototypes = torch.zeros((K, codeblock.shape[1]))
+        for i in range(K):
+            prototypes[i] = codeblock[buckets == i].mean(0)
+        
+        return prototypes
+
+
     def load_recorded_input(self):
         self.recorded_input = np.load(self.get_record_input_path())
 
