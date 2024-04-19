@@ -163,7 +163,6 @@ class NimbusLinear(Linear, NimbusLayer):
         encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
                              .scatter_(2, index, 1.0)) # N, C, K
         # 打印一个encoding,它应该是(N,C)的矩阵,每个元素是0-15之间的整数，代表这个encoding_hard的对应第几个元素为1(其余都是0)
-        print(f"DMized mode encoding matrix:", index)
         Encoded = encoding_hard - encoding_soft.detach() + encoding_soft # N, C, K
         # out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
         # M = self.lut.size(0)
@@ -264,7 +263,6 @@ class NimbusLinear(Linear, NimbusLayer):
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
             encoded = encoded * 2 + decisions
             
-        print(f"maddness only encoded matrix:", encoded)
         # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
             # 生成用于gather的索引
         gather_indices = encoded.unsqueeze(3).expand(N, C, 1, M)

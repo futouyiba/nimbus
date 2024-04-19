@@ -346,7 +346,7 @@ def encoded_lstsq(
 ):
     # print(f"encoded_lstsq called")
     # print(f"encoded_lstsq: {A_enc.shape} {X_binary.shape} {Y.shape} {K} {XtX} {XtY} {precondition} {stable_ridge}")
-    traceback.print_stack()
+    # traceback.print_stack()
 
     if stable_ridge:
         return _fit_ridge_enc(A_enc=A_enc, Y=Y, X_binary=X_binary, K=K, lamda=1)
@@ -380,7 +380,7 @@ def encoded_lstsq(
 @numba.njit(fastmath=True, cache=True, parallel=False)
 def _cumsse_cols(X):
     # TODO: can be optimized with numpy
-    print("_cumsses_cols called, X.shape: ", X.shape)
+    # print("_cumsses_cols called, X.shape: ", X.shape)
     N, D = X.shape
     cumsses = np.empty((N, D), X.dtype)
     cumX_column = np.empty(D, X.dtype)
@@ -458,8 +458,8 @@ class Bucket:
 
         self.N = len(point_ids)
         self.id = bucket_id
-        if self.N == 0:
-            print("created empty bucket: ", self.id)
+        # if self.N == 0:
+        # print("created empty bucket: ", self.id)
         # this is just so that we can store the point ids as array instead of
         # set, while still retaining option to run our old code that needs
         # them to be a set for efficient inserts and deletes
@@ -686,7 +686,7 @@ def init_and_learn_hash_function(
     X: np.ndarray, C: int, K: int, pq_perm_algo: str = "start"
 ) -> Tuple[np.ndarray, list[list[MultiSplit]], np.ndarray, list]:
     # print(f"init_and_learn_hash_function: {X.shape} {C} {K} {pq_perm_algo}")
-    traceback.print_stack()
+    # traceback.print_stack()
 
     _, D = X.shape
 
