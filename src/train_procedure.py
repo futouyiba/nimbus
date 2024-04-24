@@ -126,6 +126,11 @@ class TrainProcedure:
                 acc = (output.argmax(dim=1) == target).float().mean()
                 # 记录每个batch的loss
                 self.writer.add_scalar('batches/train_acc', acc, epoch * len(arg_settings.TrainDataLoader) + i)
+                # if exist, remove the latest checkpoint file and save the latest model
+                if path.exists(self.checkpointLatestPath):
+                    os.remove(self.checkpointLatestPath)
+                # torch.save(arg_settings.ModelInstance.state_dict(), self.checkpointLatestPath)
+                torch.save(arg_settings.ModelInstance, self.checkpointLatestPath)
             acc = 100 * correct / total
             self.writer.add_scalar('epoch/training_loss', epoch_training_loss, epoch)
             self.writer.add_scalar('crucial/training_acc', acc, epoch)
@@ -141,6 +146,7 @@ class TrainProcedure:
         # 重置scheduler & optimizer
         arg_settings.Optimizer = torch.optim.Adam(model.parameters(), lr=arg_settings.InitialLearningRate, weight_decay=arg_settings.WeightDecay, betas=(arg_settings.Momentum, 0.999))
         arg_settings.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(arg_settings.Optimizer, T_max=arg_settings.EpochsEach, eta_min=0.0001)
+        # save the latest model with step number
 
     def evaluate_model(self, model: nn.Module, epoch:int,)->float:
         model.eval()
