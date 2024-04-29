@@ -134,10 +134,18 @@ class NimbusLinear(Linear, NimbusLayer):
             # 计算误差百分比，对于每个元素，计算相对误差，百分比只显示小数点前的
             # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_dm的差的绝对值
             error_rate = (torch.abs(out_matmul - out_dm) / torch.abs(out_matmul) * 100)
+
+            
             print(f"Error percent between matmul and dm for {self.name}:{error_rate.mean().item()}%")
             # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_maddness的差的绝对值
             error_rate =( torch.abs(out_matmul - out_maddness) / torch.abs(out_matmul) * 100)
             print(f"Error percent between matmul and maddness for {self.name}: {error_rate.mean().item()}%")
+
+            # 计算out_matmul-out_dm的Frobenius范数
+            FNorm_dm_mm = torch.norm(out_matmul - out_dm, p='fro')
+            FNorm_mm = torch.norm(out_matmul, p='fro')
+            print(f"NMSE between matmul and dm for {self.name}:", FNorm_dm_mm / FNorm_mm)
+
             # # 计算输出差距,用类似于MSE的方法,和类似熵的方法
             #         # 计算均方误差MSE
             # mse_dm = torch.mean((out_matmul - out_dm) ** 2)
