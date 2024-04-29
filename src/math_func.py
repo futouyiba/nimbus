@@ -2,6 +2,27 @@ import math
 import torch
 import numpy as np
 
+def compute_nmse(estimate, target):
+    """
+    Compute the Normalized Mean Squared Error (NMSE) between the estimate and the target.
+
+    Parameters:
+    estimate (torch.Tensor): The estimated matrix.
+    target (torch.Tensor): The target matrix.
+
+    Returns:
+    float: The NMSE between the estimate and the target.
+    """
+    # Compute the Frobenius norm of the difference
+    diff_norm = torch.norm(estimate - target, p='fro')
+
+    # Compute the Frobenius norm of the target
+    target_norm = torch.norm(target, p='fro')
+
+    # Compute and return the NMSE
+    nmse = (diff_norm / target_norm) ** 2
+    return nmse.item()
+
 # create a diagonalized sparse matrix, which can be used to do selection of data
 def create_selection_matrix(
         C: int = 1, K: int = 16, dtype=torch.float32

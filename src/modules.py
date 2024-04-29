@@ -8,10 +8,13 @@ import torch.nn as nn
 from torch.nn import Parameter,Linear
 import defines
 import numpy as np
+from defines import NIMBUS_STATE_MATMUL_WITH_GRAD
 import maddness
 from maddness import Bucket, MultiSplit
 import arg_settings
+import math_func
 from math_func import create_selection_matrix, create_4layer_tree_des_matrix
+import joined_bucketing
 
 
 class NimbusLayer():
@@ -37,6 +40,10 @@ class NimbusLayer():
     def learn_maddness_params(self) -> None:
         # TODO put logic here instead of in nimbus layer
         pass
+
+    def compare_outputs(self, X):
+        pass
+
 
 
 # an enhanced version of nn.Linear, which can handle MADDNESS features, and can switch between several states:
@@ -131,9 +138,6 @@ class NimbusLinear(Linear, NimbusLayer):
             # 分母是元素的out_matmul的绝对值，分子是out_matmul和out_maddness的差的绝对值
             error_rate =( torch.abs(out_matmul - out_maddness) / torch.abs(out_matmul) * 100)
             print(f"Error percent between matmul and maddness for {self.name}: {error_rate.mean().item()}%")
-
-
-
             # # 计算输出差距,用类似于MSE的方法,和类似熵的方法
             #         # 计算均方误差MSE
             # mse_dm = torch.mean((out_matmul - out_dm) ** 2)
@@ -274,6 +278,17 @@ class NimbusLinear(Linear, NimbusLayer):
 
         return out
 
+    def compare_outputs(self, X):
+        # compare the outputs of the three methods, and print NMSEs
+        out_matmul = nn.functional.linear(X, self.weight, self.bias)
+        out_dm = self.dm_forward(X)
+        out_maddness = self.forward_maddness_only(X)
+        # calculate NMSEs
+        mse_dm = math_func.compute_mse(out_dm, out_matmul)
+        mse_maddness = math_func.compute_mse(out_maddness, out_matmul)
+        print(f"NMSE between matmul and dm for {self.name}: {mse_dm}")
+        print(f"NMSE between matmul and maddness for {self.name}: {mse_maddness}")
+
 
     def state_dict_hook(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         if 'state' in state_dict:
@@ -404,3 +419,80 @@ class NimbusLinear(Linear, NimbusLayer):
 
 class NimbusConv1d(NimbusLayer, nn.Conv1d):
     pass
+
+class NimbusLinearJoinedBucketing(NimbusLinear):
+    def __init__(self, in_features, out_features, bias=False, state=defines.NIMBUS_STATE_MATMUL_WITH_GRAD, codeblockCount=-1, treeDepth=4):
+        super().__init__(in_features, out_features, bias, state, codeblockCount, treeDepth)
+        # self.treeDesMat = Parameter(create_4layer_tree_des_matrix(1), requires_grad=False).to(arg_settings.Device)
+        self.treeDesMat.data = create_4layer_tree_des_matrix(1).to(arg_settings.Device)
+
+    def learn_maddness_params(self, X):
+        selectionMatrix, thresholds, dims, luts  = joined_bucketing.learnMaddnessJoined(X, self.weight.detach().cpu().numpy(), self.codeblockCount.item(), self.treeHeight.item())
+        self.selectionMatrix.data = torch.from_numpy(selectionMatrix).to(arg_settings.Device) # shape (C, S, d) , where S=K-1, meaning the number of split nodes
+        self.thresholds.data = torch.from_numpy(thresholds).to(arg_settings.Device) # shape (C, S)
+        self.dims.data = torch.from_numpy(dims).to(arg_settings.Device) # shape (C, S)
+        self.lut.data = torch.from_numpy(luts).to(arg_settings.Device) # shape (C, K, M)
+
+    def dm_forward(self, inputMatrix):
+        N, D = inputMatrix.shape
+        C = self.codeblockCount.item()
+        d = D // C
+        inputMatrix = inputMatrix.view(N, C, d)
+        
+        subtracted = torch.einsum("CSd, NCd -> NCS", [self.selectionMatrix, inputMatrix]) - self.thresholds # shape (N, C, S)
+        tanh_h = torch.tanh(subtracted) # shape (N, C, S)
+        sign_ste = torch.sign(subtracted) - tanh_h.detach() + tanh_h # shape (N, C, S)
+        tree_result = torch.einsum("KS, NCS -> NCK", [self.treeDesMat, sign_ste]) # shape (N, C, K)
+        # tree_result = self.treeDesMat.mm(sign_ste) # C*K, N
+        # tree_result = tree_result.T.reshape(-1, self.codeblockCount, self.bucketsPerBlock) # N, C, K
+        encoding_soft = nn.Softmax(dim=2)(tree_result) # N, C, K
+        index = torch.argmax(encoding_soft, dim=2, keepdim=True) # N, C, 1
+        encoding_hard = (torch.zeros_like(encoding_soft, memory_format=torch.legacy_contiguous_format)
+                             .scatter_(2, index, 1.0)) # N, C, K
+        # 打印一个encoding,它应该是(N,C)的矩阵,每个元素是0-15之间的整数，代表这个encoding_hard的对应第几个元素为1(其余都是0)
+        Encoded = encoding_hard - encoding_soft.detach() + encoding_soft # N, C, K
+        # out = torch.zeros([inputMatrix.shape[0], self.lut.shape[0]], dtype=torch.float32, device=inputMatrix.device)
+        # M = self.lut.size(0)
+        # out = torch.einsum("nij, kij -> nki", [Encoded, self.lut]).sum(dim=2)
+        out = torch.einsum("NCK, CKM -> NM", Encoded, self.lut)
+        return out
+    
+    def forward_maddness_only(self, X):
+        N, D = X.shape
+        C = self.codeblockCount.item()
+        d = D // C
+        h = self.treeHeight.item()
+        K = self.bucketsPerBlock.item()
+        S = K - 1
+        
+        # torch当中的weight是（M，D）的矩阵，其中M是输出的维数，D是输入的维数
+        M = self.weight.shape[0]
+        X_reshaped = X.view(N, C, d)
+
+        # 获取对应的阈值
+        encoded = torch.zeros([N, C, 1], dtype=torch.int64, device=X.device)
+        # lut_view = self.lut.view(C, K, M) # it should be already in this shape
+        dims_view = self.dims.view(1, C, S).expand(N, C, S)
+        threshold_values = self.thresholds.view(1, C, S).expand(N, C, S)
+
+        # 并行N,C个
+        for curHeight in range(h):
+            cur_dims = torch.gather(dims_view, 2, encoded) 
+            # 获取当前层的阈值
+            cur_threshold_values = torch.gather(threshold_values, 2, encoded) # N, C, 1
+            # 比较生成二进制决策结果
+            decisions = X_reshaped[:,:, cur_dims].view(N,C,1) >= cur_threshold_values
+            # 若小于，则将encoded对应的元素乘2，否则乘2再加1
+            encoded = encoded * 2 + 1 + decisions
+            
+        # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
+            # 生成用于gather的索引
+        encoded = encoded - S
+        gather_indices = encoded.unsqueeze(3).expand(N, C, 1, M)
+        lut_expanded = self.lut.unsqueeze(0).expand(N, C, K, M)
+        # 从LUT中批量提取数据
+        gathered = torch.gather(lut_expanded, 2, gather_indices) # (N,C, 1, M)
+        summed = gathered.sum(dim=1) # (N, 1, M)
+        out = summed.squeeze(1)
+
+        return out
