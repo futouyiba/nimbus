@@ -65,26 +65,26 @@ class NimbusLinear(Linear, NimbusLayer):
         # 下面的参数名应该可以解释他们自己是什么
         self.curComputeState = state
         self.name:str = f'nimbus_linear_{NimbusLayer.count-1}'
-        self.treeHeight = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False)
+        self.treeHeight = Parameter(torch.tensor(treeDepth, dtype=torch.int32), requires_grad=False).to(arg_settings.Device)
         bucketsPerBlock = 2 ** treeDepth
-        self.bucketsPerBlock = Parameter(torch.tensor(bucketsPerBlock, dtype=torch.int32), requires_grad=False)
+        self.bucketsPerBlock = Parameter(torch.tensor(bucketsPerBlock, dtype=torch.int32), requires_grad=False).to(arg_settings.Device)
         # the LUT for MADDNESS
-        self.lut = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
+        self.lut = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True).to(arg_settings.Device)
 
         if codeblockCount == -1:
             codeblockCount = in_features//arg_settings.BlockWidth
 
-        self.selectionMatrix:torch.Tensor = Parameter(create_selection_matrix(C=codeblockCount, K=16), requires_grad= True)
+        self.selectionMatrix:torch.Tensor = Parameter(create_selection_matrix(C=codeblockCount, K=16), requires_grad= True).to(arg_settings.Device)
         # how many codeblocks a row of input is divided into, noted as "C" in the maddness paper
-        self.codeblockCount = Parameter(torch.tensor(codeblockCount, dtype=torch.int32), requires_grad=False)
+        self.codeblockCount = Parameter(torch.tensor(codeblockCount, dtype=torch.int32), requires_grad=False).to(arg_settings.Device)
         # the matrix describing the tree structure, use it to matmul could get value of bucket data should get into.
         # it's a 2D matrix, a diagonalized sparse matrix
-        self.treeDesMat = Parameter(create_4layer_tree_des_matrix(self.codeblockCount.item()), requires_grad=False)
-        self.dims = Parameter(torch.zeros((self.selectionMatrix.shape[0],1), dtype=torch.int32), requires_grad=False)
-        self.dimsWithin = Parameter(torch.zeros((1, codeblockCount, treeDepth), dtype=torch.int32), requires_grad=False)
-        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True)
-        self.offset = Parameter(torch.Tensor([0.0]), requires_grad=False)
-        self.scale = Parameter(torch.Tensor([1.0]), requires_grad=False)
+        self.treeDesMat = Parameter(create_4layer_tree_des_matrix(self.codeblockCount.item()), requires_grad=False).to(arg_settings.Device)
+        self.dims = Parameter(torch.zeros((self.selectionMatrix.shape[0],1), dtype=torch.int32), requires_grad=False).to(arg_settings.Device)
+        self.dimsWithin = Parameter(torch.zeros((1, codeblockCount, treeDepth), dtype=torch.int32), requires_grad=False).to(arg_settings.Device)
+        self.thresholds = Parameter(torch.zeros(1, dtype=torch.float16), requires_grad=True).to(arg_settings.Device)
+        self.offset = Parameter(torch.Tensor([0.0]), requires_grad=False).to(arg_settings.Device)
+        self.scale = Parameter(torch.Tensor([1.0]), requires_grad=False).to(arg_settings.Device)
         # a one time flag to record the input, used for saving the input for MADDNESS
         # the reason MADDNESS needs it is that buckets should be calculated based on the input, and LUT should be calculated based on the input
         self.want_to_record_once = False
@@ -93,7 +93,7 @@ class NimbusLinear(Linear, NimbusLayer):
         # self.register_load_state_dict_post_hook(self.state_dict_hook)
         # TODO 这一层管理的其他层，例如BN层、激活层等，在做高度优化的时候，会被替换为LUT
         self.managed_layers = []
-        self.all_splits = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=False)
+        self.all_splits = Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=False).to(arg_settings.Device)
 
     def forward(self, inputMatrix):
         # do a state switch
@@ -292,8 +292,8 @@ class NimbusLinear(Linear, NimbusLayer):
         out_dm = self.dm_forward(X)
         out_maddness = self.forward_maddness_only(X)
         # calculate NMSEs
-        mse_dm = math_func.compute_mse(out_dm, out_matmul)
-        mse_maddness = math_func.compute_mse(out_maddness, out_matmul)
+        mse_dm = math_func.compute_nmse(out_dm, out_matmul)
+        mse_maddness = math_func.compute_nmse(out_maddness, out_matmul)
         print(f"NMSE between matmul and dm for {self.name}: {mse_dm}")
         print(f"NMSE between matmul and maddness for {self.name}: {mse_maddness}")
 
@@ -489,7 +489,9 @@ class NimbusLinearJoinedBucketing(NimbusLinear):
             # 获取当前层的阈值
             cur_threshold_values = torch.gather(threshold_values, 2, encoded) # N, C, 1
             # 比较生成二进制决策结果
-            decisions = X_reshaped[:,:, cur_dims].view(N,C,1) >= cur_threshold_values
+            # chosenX = X_reshaped[cur_dims].view(N,C,1)
+            chosenX = torch.gather(X_reshaped, 2, cur_dims)
+            decisions = chosenX >= cur_threshold_values
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
             encoded = encoded * 2 + 1 + decisions
             
