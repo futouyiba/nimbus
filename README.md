@@ -8,6 +8,7 @@ What's cooler is that compared with previous works, our method has faster traini
 We've done several improvement, among which we're most proud of that we solve the problem that the training speed of differentiable MADDNESS drops sharply with the increase of the number of layers in multi-layer neural networks. This reduces the training time from O(exp(n)) to O(n).
 
 一种有效的方法，使神经网络推理速度飞快，同时保持准确性,而训练过程也时间成本可控。
+除此之外，从硬件层面来讲
 
 积雨云是一种云的类型，它缓慢地积累电荷，然后迅速释放。这个过程涉及在云中逐渐积累电荷，导致以闪电形式的能量的突然和强烈的释放。
 与此类似，我们的项目需要一点额外的时间来训练模型，但一旦模型训练好了，它就可以以闪电般的速度进行推理。
@@ -18,7 +19,7 @@ We've done several improvement, among which we're most proud of that we solve th
 ## Background
 有几种场景对模型的推理速度有很高的要求：
 1. 实时推理：比如游戏、网络包转发、自动驾驶、智能家居等场景，对模型的推理速度有很高的要求。
-1. 嵌入场景：比如在网络硬件、IOT设备当中，计算资源
+1. 嵌入场景：比如在网络硬件、IOT设备当中，计算资源有限，且计算资源在可见的将来不会有明显增加。
 2. 大模型：模型大了之后，推理速度会变得很慢，比如BERT、GPT等模型。用户希望能够在保证模型精度的情况下，提高模型的推理速度。 
 
 近年来围绕Davis Blalock的论文《Multiplying Matrices without Multiplying》的研究，使用LUT（Look-Up Table）来加速矩阵乘法的计算，取得了很好的效果。我们希望能够将这种方法应用到神经网络的推理过程中，提高神经网络的推理速度。
