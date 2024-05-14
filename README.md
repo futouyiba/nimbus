@@ -7,8 +7,7 @@ Similarly, our project takes a little more time to train the model but once the 
 What's cooler is that compared with previous works, our method has faster training speed and higher accuracy.
 We've done several improvement, among which we're most proud of that we solve the problem that the training speed of differentiable MADDNESS drops sharply with the increase of the number of layers in multi-layer neural networks. This reduces the training time from O(exp(n)) to O(n).
 
-一种有效的方法，使神经网络推理速度飞快，同时保持准确性,而训练过程也时间成本可控。
-除此之外，从硬件层面来讲
+一种有效的方法，使神经网络推理速度飞快，同时保持准确性,而训练过程也时间成本可控。在对应的硬件中可以规避乘法器的使用。
 
 积雨云是一种云的类型，它缓慢地积累电荷，然后迅速释放。这个过程涉及在云中逐渐积累电荷，导致以闪电形式的能量的突然和强烈的释放。
 与此类似，我们的项目需要一点额外的时间来训练模型，但一旦模型训练好了，它就可以以闪电般的速度进行推理。
@@ -17,22 +16,73 @@ We've done several improvement, among which we're most proud of that we solve th
 我们达成了多项优化，其中最重要的是解决了可微的MADDNESS在多层神经网络中训练速度随着层数增加而急剧下降的问题。从而让训练时间从O(exp(n))降低到O(n)（注：n<100（TODO）时）。
 
 ## Background
-有几种场景对模型的推理速度有很高的要求：
-1. 实时推理：比如游戏、网络包转发、自动驾驶、智能家居等场景，对模型的推理速度有很高的要求。
+机器学习、深度学习正在各种场景下显著的帮助人们。
+而矩阵乘法是位于它们中心的基石。由于它与计算机软硬件的亲和性，以及人类数学体系中对矩阵的大量研究，它帮助机器学习、深度学习取得了许多重要进展。
+然而，对于矩阵乘法的速度，人们逐渐不满足。
+
+尤其是有几种场景对模型的推理速度有很高的要求：
+1. 实时推理：比如游戏、网络包转发、自动驾驶等场景，对模型的推理速度有很高的要求。
 1. 嵌入场景：比如在网络硬件、IOT设备当中，计算资源有限，且计算资源在可见的将来不会有明显增加。
 2. 大模型：模型大了之后，推理速度会变得很慢，比如BERT、GPT等模型。用户希望能够在保证模型精度的情况下，提高模型的推理速度。 
-
-近年来围绕Davis Blalock的论文《Multiplying Matrices without Multiplying》的研究，使用LUT（Look-Up Table）来加速矩阵乘法的计算，取得了很好的效果。我们希望能够将这种方法应用到神经网络的推理过程中，提高神经网络的推理速度。
 
 
 There are two scenarios that have high requirements for the inference speed of the model:
 1. Real-time inference: For example, games, network packet forwarding, autonomous driving, smart home and other scenarios have high requirements for the inference speed of the model.
 2. Large model: After the model becomes large, the inference speed will become very slow, such as BERT, GPT and other models. Users hope to improve the inference speed of the model while ensuring the accuracy of the model.
 
+## Former Work
+### Strassen方法 TODO 检查是否是这个名字
+核心的思路是“分而治之”和“剪除冗余”。即将大的矩阵运算拆分为若干个子矩阵，进行分别运算后的聚合。以及 TODO 剪除冗余。
+
+### Vector Quantization
+TODO
+### Bolt
+TODO<sup>[1]</sup>
+
+### Model Quantization
+
+### Binary Neural Network（BNN）
+
+### Product Quantization
+Product Quantization（PQ）的主要思路是“就近分配”：
+
+- 将A矩阵划分为若干个子空间
+- 提前在每个子空间中找到若干个质心
+- 将质心和B矩阵对应片段（slices）的乘积结果保存为LUT
+- 计算时，将各个codeblock“就近分配”到对应的质心，根据分配到的质心index查找LUT
+- 进行对应的sum，得到计算结果
+TODO：PQ的图
+
+
+### MADDNESS
+近年来围绕Davis Blalock的论文《Multiplying Matrices without Multiplying》的研究，使用LUT（Look-Up Table）来加速矩阵乘法的计算，取得了很好的效果。我们希望能够将这种方法应用到神经网络的推理过程中，提高神经网络的推理速度。
+
+MADDNESS的主要思路是用树判断代替“就近”的计算。这个代替的思路参考了“Local-Sensitive Hashing”。
+
+TODO 放图
+
+MADDNESS的算法本身是通用的，但其中包含了几个关键性的优化，这些优化主要针对CPU场景设计。
+
+### MADDNESS番外
+最终，我们发现MADDNESS推动了线性计算和决策树的互相借助、互相融合：
+
+在以往的实践中，决策树一直以其运算高效、训练速度快而深受青睐，甚至在其上衍生出了随机森林等算法。
+
+但是决策树较为依赖特征工程。而在特征工程方向不明确时，MLP可以帮助研究者找到隐含的特征关系。
+
+而在其中的线性计算变成了算法的主要部分时，计算速度就开始成为问题。
+
+此时用决策树+LUT去逼近线性计算，就得到了更快的运算速度，可以说是线性计算的决策树版。
+
+### LUT-NN
+核心思路是通过STE方法来让PQ变得可微
+
 ## Inspirations
 1. D Blalock, Multiplying Matrices without Multiplying, 2018
 2. Stella Nera
 3. LUT-NN
+
+
 
 ## Paper
 To be published
