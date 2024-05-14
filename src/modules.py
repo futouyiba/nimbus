@@ -113,15 +113,14 @@ class NimbusLinear(Linear, NimbusLayer):
             out = self.dm_forward(inputMatrix).to(inputMatrix.device)
 
         elif self.curComputeState == defines.NIMBUS_STATE_MADDNESS_ONLY:
-            # TODO 优化、缓存、加速
+            # Done 优化、缓存、加速
             # 1. 缓存cpu上的numpy数组，用于MADDNESS的计算
             # 2. 在读取的时候作特殊处理
             # 3. （后续）将所有maddness的计算放到GPU上
             # encoded = maddness.halut_encode_opt(inputMatrix.cpu().numpy(), self.all_splits.cpu().numpy())
-            # TODO 暂时使用matmul计算，先跑通锁层训练
-            out = nn.functional.linear(inputMatrix, self.weight,self.bias).to(inputMatrix.device)
+            # Done 暂时使用matmul计算，先跑通锁层训练
             # maddness.
-            return self.forward_maddness_only(inputMatrix)
+            out = self.forward_maddness_only(inputMatrix)
         elif self.curComputeState == defines.NIMBUS_STATE_RSLT_CHK:
             # 用上面的3种方法计算输出，然后比较输出的差距,输出差距统计,并且把maddness only的输出传给下一层
             out_matmul = nn.functional.linear(inputMatrix, self.weight, self.bias).to(inputMatrix.device)
