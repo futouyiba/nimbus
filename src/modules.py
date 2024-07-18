@@ -272,7 +272,7 @@ class NimbusLinear(Linear, NimbusLayer):
             # 比较生成二进制决策结果
             decisions = selectedX_reshaped[:,:,curHeight].view(N,C,1) >= cur_threshold_values
             # 若小于，则将encoded对应的元素乘2，否则乘2再加1
-            encoded = encoded * 2 + decisions
+            encoded = encoded * 2 + decisions 
             
         # 使用encoded作为index，向self.lut中取值，然后求和，得到最终的输出
             # 生成用于gather的索引
